@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 伪装图标「备忘录」的主题单色层（Android 13+）：与前景同几何的线稿。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 纸片轮廓 -->
+    <path
+        android:pathData="M40,26 h28 a7,7 0 0 1 7,7 v42 a7,7 0 0 1 -7,7 h-28 a7,7 0 0 1 -7,-7 v-42 a7,7 0 0 1 7,-7 z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3" />
+
+    <!-- 页眉分隔线 + 正文线 -->
+    <path
+        android:pathData="M33,42 h42 M39,50.5 h22 M39,61 h30 M39,71.5 h30"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+</vector>

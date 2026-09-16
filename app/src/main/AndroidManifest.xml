@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      刻意不声明 android.permission.INTERNET：
+      应用在系统层面就不具备联网能力，这是可被第三方审计验证的硬约束，
+      而不只是"我们承诺不上传"。用 aapt2 dump permissions 可以独立验证这一点。
+    -->
+
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FPB">
+
+        <!--
+          自己不带 LAUNCHER 过滤器：桌面入口全部交给下面的 activity-alias。
+          这样"桌面图标长什么样"就变成了三个别名之间的开关切换，
+          而不是一个写死的图标 —— 伪装图标功能靠的就是这一点。
+          若这里也留一份 LAUNCHER，桌面上会同时出现两个图标，伪装当场失效。
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:theme="@style/Theme.FPB"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity-alias
+            android:name=".alias.Fpb"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".alias.Notes"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_disguise_notes"
+            android:roundIcon="@mipmap/ic_disguise_notes"
+            android:label="@string/disguise_notes">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".alias.Calc"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_disguise_calc"
+            android:roundIcon="@mipmap/ic_disguise_calc"
+            android:label="@string/disguise_calc">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+    </application>
+
+</manifest>

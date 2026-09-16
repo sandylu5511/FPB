@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  窗口级颜色（Compose 绘制第一帧之前就会用到，所以必须放在 XML 里）。
+  Compose 里的完整配色见 ui/theme/Color.kt —— 两处取值都来自 FPB 字标 LOGO 的渐变。
+-->
+<resources>
+    <!-- 品牌渐变三停色：荧光柠檬绿 → 薄荷青 → 天蓝 -->
+    <color name="brand_lime">#FFE6FF4F</color>
+    <color name="brand_mint">#FF7FE3C2</color>
+    <color name="brand_blue">#FF559CF0</color>
+
+    <!-- 浅色主题（默认）：白底那一套，按 LOGO 渐变重新调过 -->
+    <color name="vault_bg">#FFF6F8FC</color>
+    <!-- 白底上必须用加深后的蓝：原始 #559CF0 对白底的对比度只有 2.8:1，正文读不清 -->
+    <color name="vault_accent">#FF1B6BE0</color>
+
+    <!-- 深色主题：跟随系统深色模式 -->
+    <color name="vault_bg_dark">#FF0A0D12</color>
+    <color name="vault_accent_dark">#FF6DB6FF</color>
+</resources>

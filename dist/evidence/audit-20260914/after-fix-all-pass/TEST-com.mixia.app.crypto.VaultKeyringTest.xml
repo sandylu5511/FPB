@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.crypto.VaultKeyringTest" tests="21" skipped="0" failures="0" errors="0" timestamp="2026-09-14T10:17:50.366Z" hostname="公司" time="5.2">
+  <properties/>
+  <testcase name="启用与未启用假密码的密钥文件结构完全一致" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.235"/>
+  <testcase name="换恢复码后旧恢复码失效新恢复码可用" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.246"/>
+  <testcase name="恢复码解出与主密码相同的 DEK" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.191"/>
+  <testcase name="假密码进入诱饵库且 DEK 与真库不同" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.245"/>
+  <testcase name="用假密码解锁后无法解开真库内容" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.234"/>
+  <testcase name="拒绝把诱饵库 DEK 写进主密码槽" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.14"/>
+  <testcase name="改主密码后旧密码失效新密码可用且 DEK 不变" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.236"/>
+  <testcase name="外部 KEK 可以包裹并解出 DEK" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.091"/>
+  <testcase name="改主密码后假密码不受影响" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.245"/>
+  <testcase name="主密码槽不可移除" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.1"/>
+  <testcase name="主密码解锁得到真库 DEK" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.193"/>
+  <testcase name="恢复码不能解锁诱饵库" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.198"/>
+  <testcase name="错误密码被拒绝" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.18"/>
+  <testcase name="真密码 假密码 错误密码的解锁耗时处于同一量级" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.697"/>
+  <testcase name="恢复码容错输入仍能解锁" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.31"/>
+  <testcase name="改主密码后恢复码依然可用" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.187"/>
+  <testcase name="错误的恢复码返回 null" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.139"/>
+  <testcase name="假密码不能与主密码相同" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.001"/>
+  <testcase name="标准档参数下完整流程可用" classname="com.mixia.app.crypto.VaultKeyringTest" time="1.133"/>
+  <testcase name="过短的主密码被拒绝" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.001"/>
+  <testcase name="未启用假密码时诱饵槽依然存在但无法打开" classname="com.mixia.app.crypto.VaultKeyringTest" time="0.194"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

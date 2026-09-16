@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 伪装图标「备忘录」的前景：一张完整的圆角纸片居中放在浅灰底上。
+     iOS 备忘录视觉 —— 琥珀页眉（上浅下深近似渐变）+ 白纸 + 灰色横线。
+     纸片 42x56，位于 (33,26)-(75,82)，对角线半径 35.6，全部落在
+     常见启动器（72dp 圆形遮罩）的安全区内，四角不会被裁掉。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 纸片本体：白底、四角 7dp 圆角 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M40,26 h28 a7,7 0 0 1 7,7 v42 a7,7 0 0 1 -7,7 h-28 a7,7 0 0 1 -7,-7 v-42 a7,7 0 0 1 7,-7 z" />
+
+    <!-- 页眉下半段（较深的琥珀），顶角跟随纸片圆角 -->
+    <path
+        android:fillColor="#FFF0B90B"
+        android:pathData="M33,42 v-9 a7,7 0 0 1 7,-7 h28 a7,7 0 0 1 7,7 v9 z" />
+
+    <!-- 页眉上半段（较亮的琥珀），叠出 iOS 备忘录的上下渐变感 -->
+    <path
+        android:fillColor="#FFFFD426"
+        android:pathData="M33,34 v-1 a7,7 0 0 1 7,-7 h28 a7,7 0 0 1 7,7 v1 z" />
+
+    <!-- 首行（标题线）：略短、略深 -->
+    <path
+        android:pathData="M39,50.5 h22"
+        android:strokeColor="#FFB9BEC6"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+
+    <!-- 正文线 -->
+    <path
+        android:pathData="M39,61 h30 M39,71.5 h30"
+        android:strokeColor="#FFC7CBD1"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+</vector>

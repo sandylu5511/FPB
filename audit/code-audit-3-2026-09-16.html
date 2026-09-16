@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>密匣 FPB · 第三轮代码审核报告</title>
+<style>
+  :root {
+    --bg: #0d0e12; --surface: #16181f; --surface2: #1c1f28; --border: #2a2e3a;
+    --text: #e6e8ee; --muted: #9aa0b0; --accent: #9B8CFF; --accent-dim: rgba(155,140,255,.12);
+    --p0: #e5484d; --p1: #f5a524; --p2: #4cc2ff; --ok: #4caf50;
+    --code-bg: #101218; --mono: 'JetBrains Mono', Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; line-height: 1.75; padding: 32px 16px 80px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { border: 1px solid var(--border); border-radius: 16px; padding: 28px 32px; background: linear-gradient(135deg, var(--surface), var(--surface2)); margin-bottom: 28px; }
+  h1 { font-size: 26px; margin-bottom: 6px; }
+  h1 .accent { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 14px; }
+  h2 { font-size: 20px; margin: 40px 0 14px; padding-left: 12px; border-left: 3px solid var(--accent); }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 8px 0; color: var(--text); }
+  .muted { color: var(--muted); font-size: 13.5px; }
+  .card { border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; background: var(--surface); margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--surface2); color: var(--muted); font-weight: 600; white-space: nowrap; }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: #c8c4f5; }
+  pre { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; overflow-x: auto; line-height: 1.6; margin: 10px 0; white-space: pre; }
+  pre .c { color: #6b7280; } pre .k { color: var(--accent); } pre .s { color: #a5d6a7; }
+  .tag { display: inline-block; padding: 1px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-right: 8px; }
+  .tag.p0 { background: rgba(229,72,77,.15); color: var(--p0); border: 1px solid rgba(229,72,77,.4); }
+  .tag.p1 { background: rgba(245,165,36,.15); color: var(--p1); border: 1px solid rgba(245,165,36,.4); }
+  .tag.p2 { background: rgba(76,194,255,.15); color: var(--p2); border: 1px solid rgba(76,194,255,.4); }
+  .tag.ok { background: rgba(76,175,80,.15); color: var(--ok); border: 1px solid rgba(76,175,80,.4); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .stat { text-align: center; padding: 18px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  .stat .num { font-size: 30px; font-weight: 700; color: var(--accent); }
+  .stat .lbl { font-size: 12.5px; color: var(--muted); }
+  .stat.ok .num { color: var(--ok); } .stat.bad .num { color: var(--p0); }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .meta-row b { color: var(--text); }
+  .four td:nth-child(2) code, .four td:nth-child(3) code { font-size: 11.5px; }
+  .warn { border-left: 3px solid var(--p1); background: rgba(245,165,36,.06); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+  .good { border-left: 3px solid var(--ok); background: rgba(76,175,80,.06); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+  .toc { columns: 2; font-size: 13.5px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc li { margin: 4px 0; }
+  ul { padding-left: 22px; }
+  .flow { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .lbl-before { color: var(--p1); font-size: 12.5px; font-weight: 600; margin-top: 10px; }
+  .lbl-after { color: var(--ok); font-size: 12.5px; font-weight: 600; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>密匣 <span class="accent">FPB</span> · 第三轮代码审核报告</h1>
+  <div class="sub">全面代码审核 + 「覆盖安装是否丢数据」链路核实</div>
+  <div class="meta-row">
+    <span>日期 <b>2026-09-16</b></span>
+    <span>版本 <b>1.0.6 (versionCode 7)</b></span>
+    <span>主源码 <b>11,408 行 / 47 文件</b></span>
+    <span>单测 <b>3,450 行 / 14 文件</b></span>
+    <span>包名 <b>com.fpb.vault</b></span>
+  </div>
+</header>
+
+<div class="card">
+  <div class="grid2" style="grid-template-columns: repeat(4, 1fr); gap: 12px;">
+    <div class="stat bad"><div class="num">5</div><div class="lbl">本轮修复缺陷</div></div>
+    <div class="stat"><div class="num">13</div><div class="lbl">新增回归测试</div></div>
+    <div class="stat ok"><div class="num">164</div><div class="lbl">全量单测全绿</div></div>
+    <div class="stat ok"><div class="num">3/3</div><div class="lbl">对照实验按预期变红</div></div>
+  </div>
+  <p class="muted" style="margin-top:14px;">
+    本轮是第三次全面审核（前两轮见 <code>code-audit-2026-09-14.html</code>、<code>code-audit-2-2026-09-14.html</code>，共修 13 处）。
+    检索方式与前两轮相同：全量通读 + <code>tools/audit-scan.py</code> 扫描"定义了但从未被使用的常量/方法"，
+    并把每条怀疑先写成<b>会失败的测试</b>。
+  </p>
+</div>
+
+<h2>零、验证证据总览</h2>
+
+<table>
+  <tr><th>证据</th><th>内容</th><th>结论</th></tr>
+  <tr>
+    <td>对照实验（JVM）</td>
+    <td><code>dist/evidence/audit3-20260916/before-fix-tests.xml</code><br><code>…/after-fix-tests.xml</code></td>
+    <td>在工程副本 <code>D:\MixiaVault-baseline3</code> 中逐条退回修复 → <b>恰好对应的 3 条测试变红</b>，其余 9 条仍绿；退回前 12 项中 3 失败，修复后 13 项全绿</td>
+  </tr>
+  <tr>
+    <td>全量单测</td>
+    <td><code>./gradlew :app:testDebugUnitTest</code></td>
+    <td><b>164 项，0 失败 0 错误</b>（前两轮 151 项无回归 + 本轮新增 13 项）</td>
+  </tr>
+  <tr>
+    <td>真机 · 覆盖安装</td>
+    <td><code>tools/verify-audit3.py</code>、<code>verify-audit3-part3.py</code></td>
+    <td><code>adb install -r</code> 前后 <code>files/fpb.key</code> 与 <code>databases/vault.db</code> 的 <b>md5 逐字节一致</b>；解锁后 1 条记录 / 4 张图片完好</td>
+  </tr>
+  <tr>
+    <td>真机 · 操作反馈</td>
+    <td><code>dist/evidence/audit3-20260916/alias-heal-and-snackbar.txt</code></td>
+    <td>修复前 <code>showSnackbar 被中断：LeftCompositionCancellationException</code>（37 ms）；修复后 <code>showSnackbar 正常结束</code></td>
+  </tr>
+  <tr>
+    <td>真机 · 别名自愈</td>
+    <td>同上 + <code>launcher-alias-recovery.txt</code></td>
+    <td>制造"偏好与实际不符"的坏状态 → 冷启动后桌面入口自动改成 <code>.alias.Notes</code>，改回后自动转回 <code>.alias.Fpb</code></td>
+  </tr>
+  <tr>
+    <td>真机 · 全新安装</td>
+    <td><code>fresh-install-and-final-apk.txt</code></td>
+    <td>卸载重装后（组件状态全为 DEFAULT）偏好文件里<b>没有</b> <code>launcher_alias</code> —— 自愈没有被误触发</td>
+  </tr>
+</table>
+
+<h2>一、本轮修复的 5 处缺陷</h2>
+
+<p class="muted">
+  严重级含义：<span class="tag p1">P1</span>会造成数据丢失或功能整体失效；
+  <span class="tag p2">P2</span>在特定场景下出错、可绕过但有代价；<span class="tag p3">P3</span>观感或维护性问题。
+</p>
+
+<!-- ==================== #1 ==================== -->
+<h3><span class="tag p1">P1</span>#1 全应用的"操作反馈与错误提示"等于没有显示</h3>
+
+<div class="card">
+  <p><b>现象.</b>点「导出备份」成功后没有任何提示；失败时也没有。所有"已导出 12 条记录"、"保存失败：…"、
+  "导入失败：…"都只是闪一下 —— 而 <code>setMessage()</code> 在全应用有 <b>55 处</b>调用，其中包括所有错误分支。</p>
+
+  <p><b>根因.</b>承载提示的 <code>LaunchedEffect</code> 把自己的 key 设成了 <code>state.notice</code>，
+  却在 effect 体内把它置空：</p>
+
+  <div class="lbl-before">改前（<code>ui/AppRoot.kt</code>）</div>
+<pre>val hostState = remember { SnackbarHostState() }
+LaunchedEffect(state.notice) {              <span class="c">// ← key 是提示文案</span>
+    val text = state.notice ?: return@LaunchedEffect
+    state.notice = null                     <span class="c">// ← 在体内改掉了自己的 key</span>
+    hostState.showSnackbar(text)
+}</pre>
+
+  <p>key 从"文案"变成 null，Compose 按语义<b>取消并重启</b>这个协程；而 <code>showSnackbar</code>
+  一旦被取消，Snackbar 会被立刻撤下（它的 finally 会清 <code>currentSnackbarData</code>）。</p>
+
+  <div class="lbl-after">改后（<code>ui/AppRoot.kt:94-107</code>）</div>
+<pre>LaunchedEffect(Unit) {                       <span class="c">// ← 只挂一次，不再随 notice 变化重启</span>
+    snapshotFlow { state.notice }
+        .filterNotNull()
+        .collect { text -&gt;
+            state.notice = null              <span class="c">// ← 在 collect 里改，不会重启本 effect</span>
+            hostState.showSnackbar(text)
+        }
+}</pre>
+
+  <p class="muted">用 <code>collect</code> 而不是 <code>collectLatest</code>：<code>showSnackbar</code> 内部有互斥锁，
+  串行消费意味着短时间内的两条提示会依次显示，而不是把前一条掐掉 —— 对"保存失败"这类提示，丢失比延迟严重得多。</p>
+
+  <table class="four">
+    <tr><th>用户可感知差异</th><th>证据</th><th>风险</th></tr>
+    <tr>
+      <td>保存、导出、导入、删除、切换图标、清理图片等<b>所有</b>操作的成败提示从"看不见"变成正常显示；
+      错误提示终于能起到告知作用（此前用户只能靠界面状态猜）</td>
+      <td>修复前：<br><code>03:59:12.239 effect 启动 text=没有发现无用图片</code><br>
+          <code>03:59:12.276 showSnackbar 被中断：LeftCompositionCancellationException</code><br>
+          修复后：<br><code>04:19:22.192 showSnackbar 正常结束 text=没有发现无用图片</code></td>
+      <td>低。只改消费方式，不改状态语义；<code>notice</code> 仍是"一次性"的</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ==================== #2 ==================== -->
+<h3><span class="tag p1">P1</span>#2「周期性提醒导出备份」从头到尾没有实现，但四处注释都在承诺它</h3>
+
+<div class="card">
+  <p><b>现象.</b>这个应用没有联网权限、没有任何自动上传、也没有云端副本 ——
+  用户不导出，"数据就只有一份"。而代码里到处写着"设置页会周期性提醒导出备份"，实际上<b>一次都不会提醒</b>。</p>
+
+  <p><b>根因.</b>写入端一直在（导出成功时记时间戳），<b>读取端从头到尾不存在</b>：</p>
+<pre>SettingsStore.kt:141   state.settings.lastBackupReminderAt = System.currentTimeMillis()   <span class="c">// 唯一的写入</span>
+<span class="c">// 全工程 grep lastBackupReminderAt → 只有这一处 + 声明本身</span>
+SettingsStore.kt:123   const val BACKUP_REMINDER_INTERVAL = 7L * 24 * 60 * 60 * 1000        <span class="c">// 零引用</span></pre>
+
+  <p>承诺它的注释有四处：<code>BackupManager.kt:49</code>（"所以设置页会周期性提醒导出"）、
+  <code>SettingsStore.kt:91/122</code>、<code>ui/components/Common.kt:248</code>（<code>InlineNotice</code> 注释里的"备份到期提醒"）。</p>
+
+  <p><b>修复.</b>新增纯对象 <code>vault/BackupReminder.kt</code>（不依赖 <code>Context</code>，因此能在 JVM 单测里钉死边界），
+  由 <code>VaultAppState.enterUnlocked()</code> 在每次解锁时判定，首页顶部渲染提示条、点击直达设置页。</p>
+
+  <div class="lbl-after">核心判据（<code>vault/BackupReminder.kt</code>）</div>
+<pre>fun eval(lastExportedAt: Long, hasContent: Boolean, now: Long): Due {
+    if (!hasContent) return Due.NONE                    <span class="c">// 空库不提醒：没东西可丢</span>
+    if (lastExportedAt &lt;= 0L) return Due.NEVER_EXPORTED  <span class="c">// 有内容却从没导出过：立刻提醒</span>
+    if (now &lt; lastExportedAt) return Due.NONE            <span class="c">// 系统时间回拨：宁可不提醒</span>
+    return if (now - lastExportedAt &gt;= INTERVAL_MILLIS) Due.STALE else Due.NONE
+}</pre>
+
+  <p class="muted">为什么"从未导出过"要单独一档，而不是"没记录过就当成刚备份过"：
+  后者恰好放过了<b>最危险</b>的那批用户 —— 有数据、却从未备份。
+  实测把这条分支退回后，测试立刻报 <code>expected:&lt;NEVER_EXPORTED&gt; but was:&lt;NONE&gt;</code>。</p>
+
+  <table class="four">
+    <tr><th>用户可感知差异</th><th>证据</th><th>风险</th></tr>
+    <tr>
+      <td>首页顶部出现常驻提示条：<br>"还没有导出过备份。内容只在这台设备上，手机丢失、损坏或应用被卸载后都无法找回。点这里去导出"<br>
+      超过 7 天未导出则换成"上次导出备份已经超过 7 天…"。<b>空库不提醒</b>，且与"条目损坏"告警条互斥（避免两条相似提示叠着出现）</td>
+      <td>真机解锁后首页节点抓取：<br><code>本机加密 · 1 条 &nbsp;还没有导出过备份。内容只在这台设备上，…</code><br>
+      见 <code>dist/evidence/m3/01-A-覆盖安装后-数据仍在.png</code></td>
+      <td>低。提示条只读不改数据；导出成功后立即撤下并重置计时（<code>markBackupReminder()</code>），
+      且<b>只在导出成功时</b>记时间戳 —— 失败也记的话，用户会被"我以为备份过了"骗上 7 天</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ==================== #3 ==================== -->
+<h3><span class="tag p1">P1</span>#3 原图读取没有上限：大图先 OOM，再谈"校验"</h3>
+
+<div class="card">
+  <p><b>现象.</b>从相册选一张几十 MB 的全景图 / 扫描件 / RAW，应用可能直接崩掉；即便没崩，
+  提示也是"这张图片读不出来，换一张试试" —— 而用户换一百张也是同一个结果。</p>
+
+  <p><b>根因.</b>读取环节无上限地往内存里堆字节，而那条 32 MiB 的校验发生在<b>这之后</b>：</p>
+
+  <div class="lbl-before">改前（<code>vault/ImagePipeline.kt</code>）</div>
+<pre>val bytes = context.contentResolver.openInputStream(uri)?.use { stream -&gt;
+    ByteArrayOutputStream(1 shl 22).also { out -&gt; stream.copyTo(out) }.toByteArray()
+} ?: return null                      <span class="c">// 所有失败都收敛成一个 null</span></pre>
+<pre>VaultSession.kt:392   require(plaintext.size &lt;= MAX_IMAGE_PLAINTEXT_BYTES) { … }   <span class="c">// 校验在读取之后</span></pre>
+
+  <p>内存已经花出去了，校验再准也拦不住 <code>OutOfMemoryError</code>
+  （它是 <code>Error</code>，堆已经榨干，后续分配照样失败 → 应用崩掉而不是给出提示）。</p>
+
+  <div class="lbl-after">改后（新增 <code>vault/Streams.kt</code> + <code>ImagePipeline.prepare</code> 返回三态）</div>
+<pre><span class="k">internal fun</span> InputStream.readCapped(limit: Int): ByteArray? {
+    val out = ByteArrayOutputStream(minOf(limit, INITIAL_CAPACITY))
+    val buffer = ByteArray(CHUNK)
+    <span class="k">var</span> total = 0
+    <span class="k">while</span> (<span class="k">true</span>) {
+        <span class="k">val</span> read = read(buffer)
+        <span class="k">if</span> (read &lt;= 0) <span class="k">break</span>
+        total += read
+        <span class="c">// 先把"越界"判掉再写：否则最后一小段超限的字节也已经进了内存。</span>
+        <span class="k">if</span> (total &gt; limit) <span class="k">return null</span>
+        out.write(buffer, 0, read)
+    }
+    <span class="k">return</span> out.toByteArray()
+}</pre>
+
+  <p>同时把"太大"与"读不出来"拆成两种可区分的结局（这本身就是扫描模式 2.4「无法区分的模糊判断」的实例），
+  并让上限只有一个出处 —— <code>ImagePipeline</code> 直接引用 <code>VaultSession.MAX_IMAGE_PLAINTEXT_BYTES</code>，
+  两侧数字不可能再漂移：</p>
+<pre><span class="k">sealed interface</span> Preparation {
+    <span class="k">data class</span> Ready(<span class="k">val</span> prepared: Prepared) : Preparation
+    <span class="k">data object</span> Unreadable : Preparation                     <span class="c">// 取不到流 / 不是图片 / 出错</span>
+    <span class="k">data class</span> TooLarge(<span class="k">val</span> limitBytes: Int) : Preparation { <span class="c">// 读完之前就放弃</span>
+        <span class="k">val</span> message: String <span class="k">get</span>() =
+            <span class="s">"图片超过单张 ${limitBytes / (1024 * 1024)} MB 的上限，请先在系统相册里裁剪或缩小后再导入"</span>
+    }
+}</pre>
+
+  <p class="muted">同一类问题也出现在备份包里：<code>BackupManager.inspect</code> 用 <code>zip.readBytes()</code> 读清单，
+  <b>没有任何上限</b> —— 而它是"选中文件之后、真正导入之前"的第一步，跑在 <code>extract</code> 那套
+  <code>MAX_ENTRY_BYTES</code>/<code>MAX_TOTAL_BYTES</code> 防护<b>之前</b>。已改为 <code>readCapped(64 KiB)</code>。</p>
+
+  <table class="four">
+    <tr><th>用户可感知差异</th><th>证据</th><th>风险</th></tr>
+    <tr>
+      <td>超大图片不再把内存吃光：选择后立刻告知"超过单张 32 MB 的上限，请先裁剪或缩小"，而不是崩溃或含糊的"换一张试试"；
+      照片库多选时还会说明"3 张因超过体积上限被跳过"，不再静默丢图</td>
+      <td>对照实验（8 MiB 输入 / 1 KiB 上限）：<br>
+        退回修复后 → <code>超限后仍读走了 8388608 字节</code><br>
+        修复后 → 读取量 ≤ 128 KiB 即停<br>
+        清单条目（4 MiB）：退回后 <code>清单被读走了 4194703 字节</code>，修复后 &lt; 512 KiB</td>
+      <td>低。上限与写入侧同一个常量；"恰好等于上限仍可用"有正向用例兜住，不会把正常图片误判为超限</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ==================== #4 ==================== -->
+<h3><span class="tag p2">P2</span>#4 桌面图标别名坏了无法自愈，而 <code>verify()</code> 正是那个"零调用的自检"</h3>
+
+<div class="card">
+  <p><b>现象.</b>伪装图标靠三个 <code>activity-alias</code> 互斥切换。<code>apply()</code> 刻意写成
+  "先启用目标、再禁用其它"（反过来会短暂出现"三个全禁用"，那一刻桌面图标消失）。代价是两步之间进程被杀
+  就会留下脏状态：桌面出现<b>两个</b>图标（伪装当场失效），极端情况下<b>一个都不剩</b>
+  （用户再也无法从桌面打开这个应用，只能去系统设置的安装列表里捞）。这两种状态都不会自愈，也不会有任何提示。</p>
+
+  <p><b>根因.</b>判据 <code>LauncherIcon.verify()</code> 一直存在，但<b>没有任何调用者</b>。
+  用 <code>tools/audit-scan.py</code> 扫出来的正是这一条："定义了但从未被使用的成员函数"。</p>
+
+  <p><b>修复.</b><code>VaultAppState.boot()</code> 冷启动即自检，异常就修回来（<code>VaultAppState.kt:780-805</code>）：</p>
+<pre><span class="k">private fun</span> repairLauncherAlias() {
+    <span class="k">val</span> expected = settings.launcherAlias
+    <span class="c">// 取不到状态时按"没问题"处理：宁可漏修，也不要在 PM 异常时反复写别名</span>
+    <span class="k">if</span> (runCatching { LauncherIcon.verify(context, expected) }.getOrDefault(<span class="k">true</span>)) <span class="k">return</span>
+    <span class="k">val</span> repaired = runCatching {
+        LauncherIcon.apply(context, expected)
+        <span class="k">if</span> (!LauncherIcon.verify(context, expected)) {
+            <span class="c">// 记录里那个别名怎么都启用不了 → 退回 FPB：保证桌面上有一个能打开这个应用的入口</span>
+            LauncherIcon.apply(context, LauncherIcon.ALIAS_FPB)
+        }
+    }
+    <span class="k">if</span> (repaired.isSuccess) {
+        launcherAlias = LauncherIcon.current(context)
+        settings.launcherAlias = launcherAlias
+    }
+}</pre>
+
+  <p class="muted">正常启动时 <code>verify()</code> 为真，一个 PackageManager 写操作都不发，不会引起桌面刷新。</p>
+</div>
+
+<h3><span class="tag p2">P2</span>#4b <code>LauncherIcon.isEnabled()</code> 把系统的 DEFAULT 当成了 DISABLED</h3>
+
+<div class="card">
+  <p><b>现象.</b>潜在缺陷，当前被 <code>current()</code> 的兜底返回值掩盖着 —— 但一旦上面的自愈逻辑以它为判据，
+  就会变成"每次全新安装都白写一遍组件状态"。</p>
+
+  <p><b>根因.</b><code>getComponentEnabledSetting</code> 在<b>从未被显式设置过</b>时返回 <code>DEFAULT</code>(0)，
+  而清单里 <code>.alias.Fpb</code> 写着 <code>android:enabled="true"</code>、另外两个写着 <code>false</code>。
+  只跟 <code>ENABLED</code> 比较的话，全新安装会被判成"三个别名全部未启用"：</p>
+
+  <div class="lbl-before">改前</div>
+<pre><span class="k">fun</span> isEnabled(context: Context, alias: String): Boolean =
+    context.packageManager.getComponentEnabledSetting(ComponentName(context, alias)) ==
+        PackageManager.COMPONENT_ENABLED_STATE_ENABLED</pre>
+
+  <div class="lbl-after">改后（<code>vault/LauncherIcon.kt:38-70</code>）</div>
+<pre><span class="k">return when</span> (pm.getComponentEnabledSetting(component)) {
+    PackageManager.COMPONENT_ENABLED_STATE_ENABLED -&gt; <span class="k">true</span>
+    <span class="c">// DISABLED_USER（用户在系统设置里关的）与 DISABLED_UNTIL_USED 同样是"不启用"。</span>
+    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+    PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+    PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED,
+    -&gt; <span class="k">false</span>
+    <span class="c">// DEFAULT：读清单里那个值</span>
+    <span class="k">else</span> -&gt; runCatching { pm.getActivityInfo(component, 0).enabled }
+        .getOrDefault(alias == ALIAS_FPB)
+}</pre>
+
+  <table class="four">
+    <tr><th>用户可感知差异</th><th>证据</th><th>风险</th></tr>
+    <tr>
+      <td>不可直接感知（是一个"判据是否可信"的问题）。可观测的差别在于：全新安装后应用是否多写一次组件状态</td>
+      <td>卸载重装（组件状态回到 DEFAULT）后冷启动：<br>
+        偏好文件里<b>没有</b>出现 <code>launcher_alias</code> 键 → 自愈没有被误触发<br>
+        （若判据仍有缺陷，自愈分支会执行并回写该键）</td>
+      <td>低。多列了两个 DISABLED 变体，语义更准确</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ==================== #5 ==================== -->
+<h3><span class="tag p3">P3</span>#5 三个"零调用 + 注释承诺了不存在的用途"的常量</h3>
+
+<div class="card">
+  <p>扫描器报出三个 <code>const val</code> 在生产代码里没有任何引用。它们的注释都在承诺某种用途，
+  而那些用途<b>从未发生</b>（与前两轮的 <code>MAX_ENTRIES</code> 是同一类病：注释描述的是"打算"，代码里是"没有"）：</p>
+
+  <table>
+    <tr><th>常量</th><th>注释承诺</th><th>实际</th><th>处理</th></tr>
+    <tr>
+      <td><code>SettingsStore.BACKUP_REMINDER_INTERVAL</code></td>
+      <td>"距离上次提醒超过这个时长就再提醒一次导出备份"</td>
+      <td>零引用，提醒从未发生</td>
+      <td>删除，概念上移到 <code>BackupReminder.INTERVAL_MILLIS</code>（单一出处）</td>
+    </tr>
+    <tr>
+      <td><code>FpbLogo.FPB_WORDMARK_ASPECT</code></td>
+      <td>"调用方按这个比例留位置就不会被拉伸"</td>
+      <td>零引用；且 <code>FpbWordmark</code> 内部已按自身比例居中（<code>min(w/INK_W, h/INK_H)</code>），<b>本来就不会拉伸</b> —— 注释描述的问题不存在</td>
+      <td>删除（连同那条失实的注释）</td>
+    </tr>
+    <tr>
+      <td><code>Base32Crockford.SIZE</code></td>
+      <td>（无注释，<code>= ALPHABET_SIZE</code>）</td>
+      <td>零引用；删掉后 <code>ALPHABET_SIZE</code> 也成了唯一的死常量</td>
+      <td>两者一并删除（字母表长度在 <code>ALPHABET</code> 字面量里自明）</td>
+    </tr>
+  </table>
+
+  <p>另外修正了一处<b>与事实相反</b>的注释：<code>SettingsStore</code> 里 <code>lastBackupReminderAt</code>
+  写的是"上次触发提醒的时间"，而它其实是在<b>导出成功</b>时被写入的。这个名实不符正是缺陷 #2 得以长期存活的土壤，
+  因此连同属性名一起改为 <code>lastExportedAt</code>（<b>偏好键名保持 <code>backup_reminder_at</code> 不变</b>，
+  避免所有存量用户的时间戳被静默清零）。</p>
+</div>
+
+<h2>二、本轮的元发现：五处缺陷有同一个形状</h2>
+
+<div class="card">
+  <p>把五处缺陷摊开看，它们不是五种毛病，而是<b>一种毛病的五种表现</b>：
+  <b>注释/命名描述的世界，与代码实际运行的世界不一致</b>。</p>
+
+  <table>
+    <tr><th>出处（注释/命名）</th><th>承诺</th><th>代码里的事实</th></tr>
+    <tr><td><code>BackupManager.kt:49</code>、<code>SettingsStore.kt:91/122</code>、<code>Common.kt:248</code></td><td>"设置页会周期性提醒导出备份"</td><td>时间戳只写不读，一次都不提醒</td></tr>
+    <tr><td><code>SettingsStore.lastBackupReminderAt</code></td><td>名字是"上次<u>提醒</u>时间"</td><td>实际写的是"上次<u>导出</u>时间"</td></tr>
+    <tr><td><code>LauncherIcon.verify()</code></td><td>"供设置页做一次自检"</td><td>零调用者，且判据本身把 DEFAULT 当 DISABLED</td></tr>
+    <tr><td><code>FPB_WORDMARK_ASPECT</code></td><td>"按这个比例留位置就不会被拉伸"</td><td>零引用，且组件本身已保证不拉伸</td></tr>
+    <tr><td><code>ImagePipeline.prepare</code> 的调用点</td><td>"读不出来会告知用户"</td><td>读取无上限 + 把所有失败收敛成一个 null</td></tr>
+  </table>
+
+  <div class="warn">
+    <b>这类缺陷为什么能长期存活：</b>它们不会让任何一条测试变红，也不会让界面明显报错 ——
+    它们只是让某个"本该发生的事情"静静地不发生。唯一稳定的检出手段是
+    <b>把注释当成断言、去代码里找它的实现</b>，以及扫描"定义了但从未被调用"的成员。
+    这也是为什么本轮把 <code>tools/audit-scan.py</code> 的第一条扫描（2.1 定义了但从未被使用的常量/方法）
+    当成了主力工具：它命中了 <b>3 / 5</b>。
+  </div>
+</div>
+
+<h2>三、对照实验：退回修复，测试必须红</h2>
+
+<div class="card">
+  <p>修复"看起来对"不算数。把工程<b>完整复制</b>到 <code>D:\MixiaVault-baseline3</code>，
+  用 <code>tools/revert_round3_fixes.py</code> 逐条退回本轮修复（每处替换都做"必须命中"校验，
+  防"以为退回了实际没退"），再跑同一套测试：</p>
+
+  <div class="lbl-before">基线副本（已退回 4 处修复）—— <code>12 tests, 3 failures</code></div>
+<pre>✗ 清单条目过大时拒绝_且不把整条读进内存
+    java.lang.AssertionError: 清单被读走了 4194703 字节，没有在上限处停下
+✗ 超过上限时立刻放弃_不再把剩余字节读进内存
+    java.lang.AssertionError: 超限后仍读走了 8388608 字节
+✗ 有内容却从未导出过时必须立刻提醒
+    java.lang.AssertionError: expected:&lt;NEVER_EXPORTED&gt; but was:&lt;NONE&gt;
+✓ 其余 9 条通过（它们断言的是未被退回的行为）</pre>
+
+  <div class="lbl-after">主工程（已修复）—— <code>13 tests, 0 failures</code>，全量 164 项全绿</div>
+<pre>BUILD SUCCESSFUL in 43s
+单测合计 164 项，失败 0，错误 0</pre>
+
+  <p class="muted">三点值得说明：
+  ① 变红的<b>恰好是</b>对应那三处修复的测试，其余 9 条仍绿 —— 失败可归因，不是连带损伤；
+  ② 断言里带的是<b>具体数字</b>（4194703 字节 / 8388608 字节），不是"应该变小"这类模糊判断；
+  ③ #4b 的"DEFAULT vs DISABLED"没有 JVM 判据（需要 <code>PackageManager</code>），
+  改用真机"全新安装后偏好文件里没有 <code>launcher_alias</code>"作为可观测证据。</p>
+</div>
+
+<h2>四、未修改但需知晓</h2>
+
+<table>
+  <tr><th>项</th><th>位置</th><th>为什么不动 / 建议</th></tr>
+  <tr>
+    <td><b>编辑器调出键盘时，底部「保存」按钮可能被键盘压住</b><br><span class="tag p2">存疑</span></td>
+    <td><code>ui/NoteEditorScreen.kt:291-295</code></td>
+    <td>
+      <b>本次未能在本机复现</b>，因此不做没有证据的改动。分析依据：<code>enableEdgeToEdge()</code> 会把窗口设成不避让系统栏
+      （实测应用窗口始终是 <code>0,0-1080,2400</code> 整屏），此时清单里那句
+      <code>windowSoftInputMode="adjustResize"</code> <b>不再生效</b>，键盘以"窗口内边距"的形式上报。
+      内容区写了 <code>.imePadding()</code>（会躲开），而底部那条按钮只写了 <code>navigationBars</code>（不会躲）。
+      <br>复现失败的原因见下一条（这台模拟器的输入法渲染不出可用键盘）。
+      <br><b>若确认，一行可改：</b>把底部按钮的 <code>.windowInsetsPadding(WindowInsets.navigationBars)</code>
+      换成 <code>WindowInsets.navigationBars.union(WindowInsets.ime)</code> —— 键盘收起时 union 等于
+      <code>navigationBars</code>（可证明的无变化），键盘弹出时按钮抬到键盘上方。
+      <br>影响面有限：编辑器顶栏另有第二个「保存」入口。
+    </td>
+  </tr>
+  <tr>
+    <td>环境限制①：模拟器的输入法渲染不出可用软键盘</td>
+    <td>Pixel 模拟器 <code>sdk_gphone16k_x86_64</code></td>
+    <td><code>mInputShown=true</code> / <code>mIsInputViewShown=true</code> / 输入法窗口 <code>isVisible=true</code>，
+    但屏幕上只出现 Gboard 的一条浮动工具条，没有键盘键位（系统设置的搜索框也一样）。
+    因此<b>所有依赖"键盘真的弹出来"的验证在这台设备上都不可信</b>，包括上面的 IME 布局问题。
+    需要在别的 AVD 或真机上才能验证。</td>
+  </tr>
+  <tr>
+    <td>环境限制②：shell 无权改组件启用状态</td>
+    <td>Android 14+ 平台策略</td>
+    <td><code>adb shell pm disable com.fpb.vault/.alias.Notes</code> 被拒：
+    <code>SecurityException: Shell cannot change component state … to 2</code>；<code>adb root</code> 也拿不到
+    （production build）。因此 #4 的真机验证改用"改偏好文件制造不一致"的方式（见 §五）。</td>
+  </tr>
+  <tr>
+    <td><code>ImagePipeline.decode</code> 显示侧仍有 OOM 可能</td>
+    <td><code>vault/ImagePipeline.kt</code></td>
+    <td>已有 <code>runCatching</code> + <code>inSampleSize</code> 采样兜底（<code>DISPLAY_EDGE=4096</code>），
+    不会崩溃，最多显示不出来。属于"原图直存"这个产品选择的固有代价，不修。</td>
+  </tr>
+  <tr>
+    <td><code>BitmapCache</code> 不响应 <code>onTrimMemory</code></td>
+    <td><code>vault/BitmapCache.kt</code></td>
+    <td>锁定时会整体 <code>clear()</code>，但没有跟随系统内存压力释放缩略图。低优先，建议后续补。</td>
+  </tr>
+  <tr>
+    <td><code>OnboardingScreen</code> 先落盘 <code>onboardingDone = true</code> 再 <code>session.unlock</code></td>
+    <td><code>ui/OnboardingScreen.kt</code></td>
+    <td>两者之间若崩溃，会出现"标记已完成但会话没建立"的不一致态：用户下次进来会直接看到解锁页。
+    <b>数据没有被动过</b>，可用主密码进入或用备份恢复，因此不动。</td>
+  </tr>
+  <tr>
+    <td><code>manifestUnreadable</code> 分支在 UI 消息里未特判</td>
+    <td><code>ui/VaultAppState.kt:352-358</code></td>
+    <td>清单不可读时，界面只说"有 N 条内容解密失败（存储可能已损坏）" —— 不说"清单"，排查时容易走偏。
+    提示不准确，不改行为。</td>
+  </tr>
+  <tr>
+    <td>零引用的成员函数：<code>popToHome</code>、<code>sizeBytes</code>、<code>toChars</code>、<code>isPlausiblePartialInput</code></td>
+    <td>分处 <code>ui/VaultAppState.kt</code>、<code>vault/BitmapCache.kt</code>、<code>crypto/Argon2Kdf.kt</code>、<code>crypto/RecoveryCode.kt</code></td>
+    <td>无害死代码，未被删除（本次只清了"注释在撒谎"的三个常量）。建议后续统一清理。
+    <br><span class="muted">注：<code>Base32Crockford.isCanonical</code>、<code>VaultKeyring.withoutSlot</code>
+    虽然生产代码零引用，但有测试引用，属于"测试覆盖的工具方法"，不算死代码。</span></td>
+  </tr>
+</table>
+
+<h2>五、确认无误的部分</h2>
+
+<p class="muted">避免"只列问题 = 代码全是问题"。以下都是本轮逐行核对过、确认正确的关键设计：</p>
+
+<table>
+  <tr><th>项</th><th>核对结论</th></tr>
+  <tr><td><b>AAD 绑定位置</b></td><td><code>Aad.dekWrap(slot)</code> / <code>entryField(id, field)</code> / <code>blob(blobId)</code> 把密文与"它该在哪"绑死，密文无法在位置间搬运。逐处核对调用点一致</td></tr>
+  <tr><td><b>清单行 id 派生</b></td><td><code>manifestRowId() = HMAC-SHA256(DEK, "mixia:index:v1")</code> 取前 16 字节 hex —— 真库与诱饵库共用一张表，靠 DEK 不同自然分域</td></tr>
+  <tr><td><b>写入原子性</b></td><td><code>create/update/delete</code> 全部走 <code>rows.inTransaction { writeNote(); persistIndex() }</code>，失败回滚内存索引</td></tr>
+  <tr><td><b>容量检查时机</b></td><td><code>requireManifestCapacity(adding)</code> 在<b>动任何数据之前</b>拒绝超限，而不是在事务里才失败</td></tr>
+  <tr><td><b>双库隔离</b></td><td><code>purgeOrphanBlobs()</code> 只删"能用当前域 DEK 解开"的孤儿，不会毁掉另一个库的图片</td></tr>
+  <tr><td><b>密钥文件写入</b></td><td>先写 <code>.tmp</code> 再 <code>renameTo</code>（原子），失败时把刚生成的 DEK 就地销毁，绝不交给界面</td></tr>
+  <tr><td><b>恢复备份的前置与顺序</b></td><td>强制锁定态（<code>check(!session().isUnlocked)</code>）→ 全程 <code>cacheDir/restore-staging</code> 暂存 → 先校验（密钥文件可解码且含 PRIMARY 槽、db 是 SQLite）→ 才 <code>swapIntoPlace</code>；替换顺序是"先让旧数据失去密钥文件、再放新数据"</td></tr>
+  <tr><td><b>zip 解析的输入防护</b></td><td><code>safeEntryName()</code> 拒 <code>..</code> 与 <code>\</code>（zip-slip）；附件名必须过 <code>RowIds.isValid</code>；<code>MAX_ENTRIES</code>/<code>MAX_ENTRY_BYTES</code>/<code>MAX_TOTAL_BYTES</code> 三级限制</td></tr>
+  <tr><td><b>恢复后的生物识别处理</b></td><td>导入必然清理 <code>bio_wrap.bin</code> 并置 <code>biometricEnabled=false</code>（硬件密钥在别的设备上，不可能匹配）</td></tr>
+  <tr><td><b>没有联网能力</b></td><td>清单里不声明 <code>INTERNET</code>，可用 <code>aapt2 dump permissions</code> 独立验证</td></tr>
+  <tr><td><b>系统备份已关闭</b></td><td><code>allowBackup="false"</code> + <code>fullBackupContent="false"</code> —— 这是"数据只在本机"的硬保证，也是升级流程必须靠手动备份的原因</td></tr>
+</table>
+
+<h2>六、验证链条（本轮做了什么才敢说"修完了"）</h2>
+
+<table>
+  <tr><th>环节</th><th>手段</th><th>结果</th></tr>
+  <tr><td>1. 找到怀疑点</td><td>全量通读 47 个主源码文件；<code>tools/audit-scan.py</code> 扫"定义了但零引用"</td><td>3 个常量 + 7 个成员函数；结合注释承诺筛出 5 处缺陷</td></tr>
+  <tr><td>2. 让怀疑变成会失败的测试</td><td>新建 <code>app/src/test/.../audit/Audit3RegressionTest.kt</code>（13 项）</td><td>覆盖：提醒策略 4 个边界、读取封顶 5 项（含两条反向用例）、清单封顶 3 项、文案 1 项</td></tr>
+  <tr><td>3. 修</td><td>5 处缺陷 + 1 处注释失真</td><td>新增 <code>vault/BackupReminder.kt</code>、<code>vault/Streams.kt</code>；改 <code>AppRoot</code>/<code>VaultAppState</code>/<code>HomeScreen</code>/<code>SettingsScreen</code>/<code>Common</code>/<code>ImagePipeline</code>/<code>NoteEditorScreen</code>/<code>PhotoLibraryScreen</code>/<code>BackupManager</code>/<code>LauncherIcon</code>/<code>SettingsStore</code></td></tr>
+  <tr><td>4. 对照实验</td><td>工程副本 + <code>tools/revert_round3_fixes.py</code> 逐条退回，跑同一套测试</td><td>3/3 按预期变红，且可归因</td></tr>
+  <tr><td>5. 真机验证</td><td><code>verify-audit3.py</code> / <code>-part2</code> / <code>-part3</code></td><td>覆盖安装 md5 一致；提示条正常显示（日志 + 截图）；别名自愈双向生效；全新安装不误触发自愈</td></tr>
+  <tr><td>6. 回填证据</td><td><code>dist/evidence/audit3-20260916/</code>、<code>dist/evidence/m3/*.png</code></td><td>XML 报告、logcat、偏好文件、截图</td></tr>
+</table>
+
+<h2>七、交付物</h2>
+
+<table>
+  <tr><th>文件</th><th>说明</th></tr>
+  <tr><td><code>audit/code-audit-3-2026-09-16.html</code></td><td>本报告</td></tr>
+  <tr><td><code>dist/升级与备份说明.md</code></td><td><b>第二个问题的交付物</b>：覆盖安装是否丢数据的完整链路、逐项会丢数据的操作清单、备份包里有什么/没有什么、换机与换签名流程、常见误解</td></tr>
+  <tr><td><code>dist/evidence/audit3-20260916/</code></td><td>对照实验 XML（退回前 3 红 / 修复后全绿）、logcat、偏好文件、桌面入口恢复记录、全新安装记录</td></tr>
+  <tr><td><code>dist/evidence/m3/*.png</code></td><td>真机截图：覆盖安装后数据仍在、提示条显示、图标自愈前后</td></tr>
+  <tr><td><code>app/src/main/java/com/fpb/vault/vault/BackupReminder.kt</code><br><code>app/src/main/java/com/fpb/vault/vault/Streams.kt</code></td><td>本轮新增的两个纯逻辑单元（可 JVM 单测）</td></tr>
+  <tr><td><code>app/src/test/java/com/fpb/vault/audit/Audit3RegressionTest.kt</code></td><td>本轮 13 项回归测试</td></tr>
+  <tr><td><code>dist/FPB-v1.0.6-audit3-debug.apk</code></td><td>含全部修复的调试包（临时诊断代码已移除，164 项单测通过后构建）</td></tr>
+  <tr><td><code>tools/audit-scan.py</code>、<code>probe-ime.py</code>、<code>verify-audit3*.py</code>、<code>revert_round3_fixes.py</code></td><td>本轮新增/更新的工具脚本（含踩坑记录）</td></tr>
+</table>
+
+<div class="warn">
+  <b>一个建议（未擅自执行）：</b>本轮改动改变了用户可见行为 —— 首页多出备份提醒条、
+  图片过大与读不出来分成两句不同提示、全应用的成败反馈从"看不见"变成正常显示。
+  正式发布时建议把 <code>versionCode</code> / <code>versionName</code> 提一档，
+  便于区分"装的是哪一版"（尤其是排查"提示没出现"这类反馈时）。
+  另：<code>dist/FPB-v1.0.6.apk</code>（发布签名包）是本次审核<b>之前</b>构建的，不含这些修复。
+</div>
+
+<div class="card">
+  <h3>附：本轮的三个工具坑（都已写进脚本注释）</h3>
+  <ul>
+    <li><b>并行编辑同一个文件会互相覆盖。</b>同一文件的多处改动必须逐条串行执行；本轮一度出现"工具报成功、文件里却没有"，
+    造成一次构建失败（<code>Unresolved reference 'BackupReminder'</code>）。症状极具迷惑性。</li>
+    <li><b><code>run-as ... sed 's|...|...|'</code> 里的引号会被 adb 的远端 shell 吃掉</b>，模式永远匹配不上，
+    而 sed 匹配不上时既不报错也不改文件 —— 看起来像"改动被应用回写了"。改用"本地改好 → push → <code>run-as cp</code>"。</li>
+    <li><b>测量方法本身会骗人。</b>第一次验证提示条时只等了 1.2 秒就读日志，<code>showSnackbar</code> 尚未返回，
+    于是"没有结束日志"被误读成"修复没生效"。Snackbar 是 Short 时长（约 4 秒），必须等展示走完。</li>
+  </ul>
+</div>
+
+<p class="muted" style="margin-top:28px; text-align:center;">
+  密匣 FPB 第三轮代码审核报告 · 2026-09-16 · 全部结论均附可复算证据
+</p>
+
+</div>
+</body>
+</html>

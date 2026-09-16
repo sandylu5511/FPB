@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      XML 主题只负责 Compose 接管之前的那一帧（窗口背景、状态栏），
+      完整配色在 Compose 的 FpbTheme 里。两边必须一致，否则冷启动会闪一下异色。
+    -->
+    <style name="Theme.FPB" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/vault_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorAccent">@color/vault_accent</item>
+    </style>
+
+</resources>

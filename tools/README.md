@@ -1,0 +1,109 @@
+# tools/ —— 开发期辅助工具
+
+这个目录位于 `app` 模块之外，Gradle 不会把这里的任何内容打包进 APK。
+
+## Argon2Bench.java
+
+Argon2id 性能基准，用来确定 KDF 参数档位 —— **不靠猜**。
+
+### 为什么需要它
+
+密码哈希的内存开销（m）和迭代次数（t）同时决定两件事：
+
+- 攻击者离线暴力破解的成本
+- 用户每次解锁要等多久
+
+两者此消彼长，所以必须先在目标硬件上量出耗时曲线，再挑一个
+"破解成本足够高、用户又感觉不到"的点。拍脑袋定参数的结果通常是
+要么形同虚设（m=8 MiB），要么每次解锁卡三秒被用户骂。
+
+### 运行方式
+
+本机只有一个 JDK（Android Studio 自带的 JBR 25），BouncyCastle 来自 Gradle 缓存。
+
+Git Bash：
+
+```bash
+JAVA="/c/Program Files/Android/Android Studio/jbr/bin/java.exe"
+BC='C:\Users\<用户名>\.gradle\caches\modules-2\files-2.1\org.bouncycastle\bcprov-jdk18on\1.77\<hash>\bcprov-jdk18on-1.77.jar'
+"$JAVA" -Xmx2g -cp "$BC" 'D:\MixiaVault\tools\Argon2Bench.java'
+```
+
+`-Xmx2g` 不能省：256 MiB 档位的 Argon2 会在堆上分配同等大小的内存块，
+默认堆上限可能不够（JDK 25 默认堆 = 物理内存 / 4，通常够，但低内存机器会踩坑）。
+
+### 实测数据（2026-09-14，PC，JDK 25，BouncyCastle 1.77 纯 Java 实现）
+
+Java 单次派生 32 字节，预热后取 3 次平均：
+
+| 参数档位 | 平均 | 最快 |
+|---|---|---|
+| 32 MiB / t2 / p1 | 44 ms | 40 ms |
+| **64 MiB / t3 / p2** | **155 ms** | 144 ms |
+| 64 MiB / t3 / p4 | 146 ms | 145 ms |
+| 128 MiB / t4 / p2 | 479 ms | 432 ms |
+| 256 MiB / t4 / p2 | 1002 ms | 989 ms |
+
+### 由此得出的两个结论
+
+**1. 默认档定为 64 MiB / t3 / p2**（对应 `KdfParams.standard()`）：
+
+- PC 上 155 ms，按手机端 3~5 倍劣化估算约 0.5~0.8 秒 —— 用户可感知但不烦
+- 是 OWASP 对 Argon2id 推荐下限（19 MiB）的三倍多
+- 对比：如果用户选了 256 MiB 档，手机上要 3~5 秒，每次解锁都像卡死
+
+**2. 不需要引入 native 实现**（如 argon2kt）：
+
+纯 Java 已经够快，而 native 库有两个实际代价 —— 单元测试无法覆盖生产代码
+（`.so` 在 JVM 测试环境加载不了，只能靠仪器测试），以及多一份 ABI 打包负担。
+
+### 真机数据从哪里来
+
+应用内的"加密内核自检"第一项会输出当前设备上标准档的实际耗时，
+那是比这里的 PC 数据更有意义的数字。
+
+---
+
+## 走查 / 验收脚本
+
+`walkthrough.py` 是公共底座（装包、点击、输入、`uiautomator` 取层级、截图、断言的封装），
+`uitest.py` 是最早的单体脚本。其余按版本号成对出现，**每一版的脚本都原样保留**，
+因为"当时是怎么判的"本身就是要留档的东西。
+
+| 脚本 | 覆盖 |
+|---|---|
+| `walkthrough-v102*.py` ~ `v104.py` | 早期里程碑走查 |
+| `walkthrough-v105.py` / `-part2.py` | 深色模式可读性；大图左右滑动 |
+| `walkthrough-v106.py` | 外观模式三档（16 项断言）：浅色/深色/跟随系统、持久化、显式设置优先于系统 |
+| `walkthrough-v106-part2.py` | 大图按原图比例 + 双击「适应屏幕 ↔ 实际大小」（10 项断言） |
+
+跑法（两个部分要**连跑**：第 1 部分会 `pm clear` 并走完引导，第 2 部分才有干净的库可导入）：
+
+```bash
+cd /d/MixiaVault
+export ADB="D:/AndroidSdk/platform-tools/adb.exe"
+PY=/c/Users/fa_12/.workbuddy/binaries/python/envs/default/Scripts/python.exe
+"$PY" -u tools/walkthrough-v106.py && "$PY" -u tools/walkthrough-v106-part2.py
+```
+
+（`default` 这个 venv 里有 PIL —— 截图量像素要靠它。用系统 Python 会缺 Pillow。）
+
+### 三条与"模拟器状态"有关的经验，别再从零踩一遍
+
+1. **不要一边跑验收一边跑 Gradle。** 模拟器与 Gradle 抢宿主 CPU，
+   应用的冷启动时间会从二十几秒涨到一分半以上，`uiautomator dump` 的失效窗口同步变长。
+   这一条造成过一次整轮的假失败。
+2. **模拟器跑久了 UiAutomation 会劣化**（`dump` 打印成功却不写文件、`null root node` 频发）。
+   `adb reboot` 就能拉回来，实测 load average 从 11 降到 0.3，不用重建 AVD。
+3. **双击要用 `sleep 0.12` 隔开两次 `input tap`**（详见 `walkthrough-v106-part2.py`
+   里 `double_tap()` 的注释）：Compose 的双击下界是 40ms，而空闲模拟器上两次 `input tap`
+   只隔 ~35ms，**点太快反而不算双击**。
+
+### `probe-*.py` 是什么
+
+`probe-theme-dialog*.py`、`probe-double-tap*.py`、`probe-animation.py` 是排查具体
+BUG 时写的一次性探针：在特定界面反复 dump 层级 / 量像素 / 捞 logcat，用来说明
+"到底看见了什么"。它们**不是验收门禁**，没有断言，留着是为了在同类问题复发时能直接复用
+（`probe-animation.py` 就完整复现过"双击动画被自己取消"那个坑）。
+`probe-double-tap*.py` 留下的测量数据（两次 `input tap` 间隔 ≈35ms~200ms 随设备负载漂移、
+`motionevent` 连击不可用）是 `double_tap()` 里 `sleep 0.12` 的依据。

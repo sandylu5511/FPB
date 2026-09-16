@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>密匣 MixiaVault · 第二轮全面代码审核报告（2026-09-14/15）</title>
+<style>
+  :root {
+    --bg: #0d0e12; --surface: #16181f; --surface2: #1c1f28; --border: #2a2e3a;
+    --text: #e6e8ee; --muted: #9aa0b0; --accent: #9B8CFF; --accent-dim: rgba(155,140,255,.12);
+    --p0: #e5484d; --p1: #f5a524; --p2: #4cc2ff; --ok: #4caf50;
+    --code-bg: #101218; --mono: 'JetBrains Mono', Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; line-height: 1.75; padding: 32px 16px 80px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { border: 1px solid var(--border); border-radius: 16px; padding: 28px 32px; background: linear-gradient(135deg, var(--surface), var(--surface2)); margin-bottom: 28px; }
+  h1 { font-size: 26px; margin-bottom: 6px; }
+  h1 .accent { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 14px; }
+  h2 { font-size: 20px; margin: 40px 0 14px; padding-left: 12px; border-left: 3px solid var(--accent); }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 8px 0; color: var(--text); }
+  .muted { color: var(--muted); font-size: 13.5px; }
+  .card { border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; background: var(--surface); margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--surface2); color: var(--muted); font-weight: 600; white-space: nowrap; }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: #c8c4f5; }
+  pre { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; overflow-x: auto; line-height: 1.6; margin: 10px 0; }
+  pre .c { color: #6b7280; } pre .k { color: var(--accent); } pre .s { color: #a5d6a7; }
+  .tag { display: inline-block; padding: 1px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-right: 8px; }
+  .tag.p0 { background: rgba(229,72,77,.15); color: var(--p0); border: 1px solid rgba(229,72,77,.4); }
+  .tag.p1 { background: rgba(245,165,36,.15); color: var(--p1); border: 1px solid rgba(245,165,36,.4); }
+  .tag.p2 { background: rgba(76,194,255,.15); color: var(--p2); border: 1px solid rgba(76,194,255,.4); }
+  .tag.ok { background: rgba(76,175,80,.15); color: var(--ok); border: 1px solid rgba(76,175,80,.4); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .stat { text-align: center; padding: 18px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  .stat .num { font-size: 30px; font-weight: 700; color: var(--accent); }
+  .stat .lbl { font-size: 12.5px; color: var(--muted); }
+  .stat.ok .num { color: var(--ok); } .stat.bad .num { color: var(--p0); }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .meta-row b { color: var(--text); }
+  .four td:nth-child(2) code, .four td:nth-child(3) code { font-size: 11.5px; }
+  .warn { border-left: 3px solid var(--p1); background: rgba(245,165,36,.06); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+  .good { border-left: 3px solid var(--ok); background: rgba(76,175,80,.06); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+  .toc { columns: 2; font-size: 13.5px; }
+  .toc a { color: var(--accent-dim); color: var(--accent); text-decoration: none; }
+  .toc li { margin: 4px 0; }
+  ul { padding-left: 22px; }
+  .flow { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>密匣 MixiaVault · <span class="accent">第二轮全面代码审核报告</span></h1>
+  <div class="sub">审核方式：全量通读 6,049 行源码 + 测试 → 疑点写成会失败的探测测试 → 证实后再修 → 修复后对照实验 → 真机自检</div>
+  <div class="meta-row">
+    <span>对象 <b>M2 数据层 + M1 加密内核</b></span>
+    <span>轮次 <b>第 2 轮（上轮修复 13 处后的复核）</b></span>
+    <span>结论 <b style="color:var(--ok)">6 处新缺陷全部修复，143/143 单测 + 19/19 真机自检通过</b></span>
+  </div>
+</header>
+
+<h2>零、验证证据总览</h2>
+<div class="grid2">
+  <div class="stat ok"><div class="num">143 / 143</div><div class="lbl">单元测试（修复后全量重跑）</div></div>
+  <div class="stat bad"><div class="num">9 / 42</div><div class="lbl">对照实验：基线（退回修复）上失败的测试数</div></div>
+  <div class="stat ok"><div class="num">19 / 19</div><div class="lbl">真机自检（最终 APK，logcat 通道）</div></div>
+  <div class="stat ok"><div class="num">0 命中</div><div class="lbl">设备拉回密文文件独立 grep 明文标记</div></div>
+</div>
+<p class="muted" style="margin-top:10px">证据目录：<code>dist/evidence/audit2-20260914/</code>（before-fix / after-fix / device-files/logcat）。对照实验：复制工程至 <code>D:\MixiaVault-baseline2</code>，用脚本逐字退回 6 处修复（退回全部命中，防止"以为退了没退"），同一套测试跑出 8 条探测失败 + 1 条翻转的旧测试失败 —— 证明修复后的全绿不是测试自证。基线副本因删除请求被拒，保留在 <code>D:\MixiaVault-baseline2</code> 可自行处理。</p>
+
+<h2>一、本轮修复的 6 处缺陷</h2>
+
+<div class="card">
+  <h3>#1 <span class="tag p1">P1</span>不可读/缺失的条目 id 在下一次写入时被静默从清单抹掉</h3>
+  <p><b>改前</b>（<code>VaultSession.kt</code> loadIndex/persistIndex）：</p>
+  <pre><span class="c">// 损坏行只进报告，不进任何持久结构</span>
+if (row == null) { missing++; continue }
+if (payload == null) { unreadable++; continue }
+...
+<span class="c">// persistIndex 只写 index.keys —— broken id 不在其中</span>
+val listBytes = NoteIndexCodec.encode(index.keys.toList())</pre>
+  <p><b>改后</b>：</p>
+  <pre>private val brokenIds = LinkedHashSet&lt;String&gt;()  <span class="c">// 清单里存在但缺失/解不开的 id</span>
+if (row == null) { missing++; brokenIds.add(id); continue }
+if (payload == null) { unreadable++; brokenIds.add(id); continue }
+...
+val listBytes = NoteIndexCodec.encode(index.keys.toList() + brokenIds)
+<span class="c">// 容量检查同步计入：val next = index.size + brokenIds.size + adding</span></pre>
+  <table class="four">
+    <tr><th>用户感知差异</th><td>损坏条目的问题<strong>持续可见</strong>：解锁时提示"1 条不可读"，此后每次解锁都继续报，直到用户处理；修复前是"新建任意一条笔记后问题凭空消失"。</td></tr>
+    <tr><th>风险</th><td>触发条件：任一条目密文损坏或行丢失后发生任何写入。修复前后果：<strong>不可逆</strong>——该行的域归属凭证（清单是唯一凭证）永久丢失，行变成无法归属、无法清理、无法被另一库认领的永久孤儿。触发概率低（需介质损坏），但数据完整性设计目标被击穿。</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>#2 <span class="tag p1">P1</span>索引清单编码器不校验 id 形状（自锁清单类缺陷）</h3>
+  <p><b>改前</b>（<code>NoteIndexCodec.kt</code> encode）：</p>
+  <pre>require(ids.size &lt;= MAX_ENTRIES) { ... }
+<span class="c">// 对 id 本身零校验 —— "zzz" 也能写进去</span></pre>
+  <p><b>改后</b>：</p>
+  <pre>ids.forEach { id -&gt;
+    require(RowIds.isValid(id)) { "清单 id 形状非法（应为 32 位十六进制）：$id" }
+}</pre>
+  <table class="four">
+    <tr><th>用户感知差异</th><td>无直接感知（当前生产路径的 id 源全部合法，属潜在缺陷）。修复的是防线位置：从"所有调用方永远不犯错"移到"能写坏数据的那一侧"。</td></tr>
+    <tr><th>风险</th><td>与第一轮修掉的"MAX_ENTRIES 只查解码侧"同类：一旦写出一份含非法 id 的清单，下次解锁判定"清单不可读"，<strong>整库锁死且无补救途径</strong>。当前为潜在路径（自定义 idFactory、将来的备份导入会引入外部 id）。</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>#3 <span class="tag p2">P2</span>密钥文件解码不检查尾部多余字节</h3>
+  <p><b>改前</b>（<code>VaultKeyFile.kt</code> decode）：读完最后一个槽位即返回，追加的任意字节被静默忽略。且第一轮测试 <code>尾部被追加垃圾字节仍能解码</code> 把这个缺陷<b>固化成了预期行为</b>。</p>
+  <p><b>改后</b>：</p>
+  <pre>if (input.available() != 0) {
+    throw VaultKeyFileException("密钥文件尾部存在 ${input.available()} 字节多余数据（可能被篡改或格式不匹配）")
+}</pre>
+  <p>同步把旧测试翻转为 <code>尾部被追加垃圾字节应被拒绝</code>（基线上它失败，修复后通过）。</p>
+  <table class="four">
+    <tr><th>用户感知差异</th><td>导入被拼接/篡改过的备份密钥文件时，得到明确报错而不是"静默接受一个来源可疑的密钥文件"。</td></tr>
+    <tr><th>风险</th><td>触发条件：导入不可信备份包（M5 场景）。NoteCodec 与 NoteIndexCodec 都有此检查，唯独密钥文件漏了——密钥文件恰是三者中输入最不可信的一个。</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>#4 <span class="tag p2">P2</span>笔记编解码不校验 blobId 形状（防线分散）</h3>
+  <p><b>改前</b>：编码接受任意字符串当 blobId；解码原样放行。每个使用点（<code>image()</code>/<code>deleteImage()</code>/<code>FileBlobStore.fileFor()</code>）各自做 <code>RowIds.isValid</code> 防御——防线存在但分散，脏引用会进内存索引长期存活。</p>
+  <p><b>改后</b>：编码侧 <code>require</code>、解码侧整条笔记判为不可读（走 LoadReport 的 <code>unreadableRows</code> 报告通道，不静默）。</p>
+  <table class="four">
+    <tr><th>用户感知差异</th><td>无直接感知（当前无路径能产出非法 blobId）。防线从"每个 UI 使用点各自记得防"收敛为"入库即拒绝"。</td></tr>
+    <tr><th>风险</th><td>低——路径穿越本身一直被挡（fileFor 拼路径前校验）。修复属于防御纵深前移 + 编解码对称性。</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>#5 <span class="tag p2">P2</span>putImage 无明文体积上限（第一轮已知项，本轮补上）</h3>
+  <p><b>改前</b>（<code>VaultSession.putImage</code>）：任意大小的明文字节直接加密落盘。</p>
+  <p><b>改后</b>：</p>
+  <pre>const val MAX_IMAGE_PLAINTEXT_BYTES = 32 * 1024 * 1024  <span class="c">// 32 MiB</span>
+require(plaintext.size &lt;= MAX_IMAGE_PLAINTEXT_BYTES) { "图片明文 ${plaintext.size} 字节超过上限..." }</pre>
+  <table class="four">
+    <tr><th>用户感知差异</th><td>正常重编码图片（长边 2048 / JPEG q85，约 1~3 MB）不受影响；异常巨图得到明确报错，而不是入库后拖垮每次解锁、或让低端机在解密时 OOM。</td></tr>
+    <tr><th>风险</th><td>触发条件：上游图片管线忘记压缩（M3 接入时的真实风险）。恰好等于上限的图片仍可用（有正向测试）。</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>#6 <span class="tag p2">P2</span>create() 的 id 冲突静默覆盖已有条目（防御加固）</h3>
+  <p><b>改前</b>：新 id 不查重。idFactory 返回已有 id 时，旧条目的内存索引与磁盘密文被同时替换，<strong>无任何异常</strong>。</p>
+  <p><b>改后</b>：</p>
+  <pre>check(id !in index) { "生成的条目 id 与现有条目冲突，拒绝覆盖：$id" }
+check(id != manifestRowId()) { "生成的条目 id 与清单行冲突，拒绝覆盖：$id" }</pre>
+  <table class="four">
+    <tr><th>用户感知差异</th><td>无直接感知（128 位随机 id 碰撞概率约等于零）。将来备份导入引入外部 id 时，碰撞表现为大声报错而非静默丢数据。</td></tr>
+    <tr><th>风险</th><td>潜在路径：测试用自定义 idFactory、M5 备份导入。第二条 check 同时挡住"笔记行写到清单行 id 上"（会覆盖"哪些笔记存在"的唯一凭证）。</td></tr>
+  </table>
+</div>
+
+<h2>二、本轮的元发现：测试也可能为缺陷背书</h2>
+<div class="warn">
+<p><b>VaultKeyFileTest.<code>尾部被追加垃圾字节仍能解码</code> 是一条把缺陷当预期行为写进测试的用例</b>（注释原文："追加垃圾不影响解析：读取按长度字段推进，多余部分自然被忽略"）。它让第一轮审核（含上一轮的我自己）接受了"密钥文件不查尾部字节"这个行为——因为有一个绿灯在给它背书。</p>
+<p><b>教训已并入审核技能</b>：审"生产代码缺校验"的同时，必须反向审"测试是否在断言缺陷行为"。判别法：找所有名字里含"仍能/仍然/不影响/可以继续"的测试，逐条问"这真的是设计意图，还是当时实现恰好如此"。</p>
+</div>
+
+<h2>三、修复过程中再次踩到的工具坑（已二次证实）</h2>
+<p><b>同一文件的多条编辑会被静默丢弃</b>——工具报告成功但内容未变。本轮 VaultSession.kt 的 6 处编辑中 <b>3 处被丢弃</b>（create 冲突检查、putImage 上限、容量计数含 brokenIds），前两处靠测试失败暴露，<b>第三处连测试都没能暴露</b>（该分支无测试覆盖），最终靠 grep 复核发现。处置：</p>
+<ul>
+  <li>本轮所有编辑已改为"单条编辑 → 立即 grep 验证"流程；</li>
+  <li>诚实披露：容量修复（#1 的组成部分）是在全量测试通过之后才补落盘的，随后重跑了全量 143/143 + 重建 APK + 真机自检 19/19，证据为最终一轮；</li>
+  <li>该分支的残余缺口：容量检查含 brokenIds 的组合场景没有专门测试（构造 10 万条目 + 损坏组合在单测里代价过高），但有硬兜底——<code>NoteIndexCodec.encode</code> 的编码侧上限检查会让事务回滚，不会写出自锁清单。</li>
+</ul>
+
+<h2>四、未修改但需知晓（设计权衡，刻意不修）</h2>
+<table>
+  <tr><th>项</th><th>为什么不修</th><th>修了会误伤什么</th></tr>
+  <tr>
+    <td>loadIndex"清单行不存在 = 全新库"的模糊判断</td>
+    <td>两种情况字节层面不可区分；写入侧事务已把窗口关到只剩介质损坏</td>
+    <td>改成"库里有行就拒绝解锁"会让诱饵库首次打不开（真库有行、诱饵库还没写过），胁迫防护被废</td>
+  </tr>
+  <tr>
+    <td>update() 移除图片后不立即删 blob</td>
+    <td>用户撤销"移除图片"的操作需要可恢复；孤儿密文无害且可被 purgeOrphanBlobs 清理</td>
+    <td>立即删除会让误操作不可逆——图片是全应用唯一不可再生数据</td>
+  </tr>
+  <tr>
+    <td>KDF 参数上限 1 GiB（低内存设备仍可能 OOM）</td>
+    <td>上界已从无界收紧到 1 GiB；正常备份文件只会带预设档位参数</td>
+    <td>收紧到手机安全值会让"高安全档 256 MiB"在某些设备的合法备份被拒</td>
+  </tr>
+  <tr>
+    <td>AAD 无长度前缀（理论上 "a:b"+"c" 与 "a"+"b:c" 可碰撞）</td>
+    <td>参与 AAD 的 id 全部是 32 位定长十六进制、field 是内部常量，实际无歧义</td>
+    <td>改格式会作废所有已落盘密文</td>
+  </tr>
+  <tr>
+    <td><code>Aad.manifest()</code> / <code>isPlausiblePartialInput()</code> / <code>storageBytes()</code> / <code>deleteImage()</code> 当前无生产调用方</td>
+    <td>均为 M3（设置页/输入框）/M5（备份导出）预留；自检与测试有引用</td>
+    <td>删除后再加回来徒增变更噪音</td>
+  </tr>
+  <tr>
+    <td>解密后密码 CharArray 未在调用方清零（自检与测试路径）</td>
+    <td>生产 UI（M3）接入时统一处理更合适</td>
+    <td>现在改测试代码无收益</td>
+  </tr>
+</table>
+
+<h2>五、确认无误的部分（避免"只列问题 = 代码全是问题"）</h2>
+<div class="good">
+<ul>
+  <li><b>真/假库隔离链路完整</b>：域标记编译期防写错槽、AAD 防密文搬运、解锁双槽同试不短路、purgeOrphanBlobs 仅认"当前域 DEK 解得开的附件"——本轮未发现新绕过。</li>
+  <li><b>事务原子性</b>（第一轮修复后）：create/update/delete 的行+清单同事务，Fakes 实现真实回滚；真机自检"重开后完整恢复"持续通过。</li>
+  <li><b>Base32Crockford / RecoveryCode</b>：别名输入、容错映射、往返唯一性在上轮修复后无回归。</li>
+  <li><b>NoteCodec 解码器的防御立场</b>：长度对 available() 的预检查、尾部干净检查、异常吞掉不泄细节——结构良好。</li>
+  <li><b>权限与落盘形状</b>：无 INTERNET 权限、allowBackup=false、数据库三列纯密文、附件目录随机文件名——独立 grep 0 命中复验通过。</li>
+  <li><b>SQLite 层</b>：占位符 SQL、BEGIN/END 事务配对、REPLACE 语义不踩 FK 陷阱（表无外键）。</li>
+</ul>
+</div>
+
+<h2>六、验证链条（本轮做了什么才敢说"修完了"）</h2>
+<table>
+  <tr><th>步骤</th><th>结果</th><th>证据</th></tr>
+  <tr><td>1. 基线全量测试（审核前）</td><td>132/132 通过</td><td>test-results XML</td></tr>
+  <tr><td>2. 写探测测试（修复前）</td><td><b>8 条缺陷探测全部失败</b> + 3 条正向对照通过</td><td>before-fix XML</td></tr>
+  <tr><td>3. 应用 6 处修复（含 grep 逐条验证落盘）</td><td>—</td><td>本轮编辑记录</td></tr>
+  <tr><td>4. 全量测试（修复后）</td><td>143/143 通过（净增 11 条测试）</td><td>after-fix XML</td></tr>
+  <tr><td>5. 对照实验：基线退回全部修复</td><td>同一套测试 42 条中 9 条失败（8 探测 + 1 翻转旧测试）</td><td>before-fix XML + revert 脚本（tools/revert_round2_fixes.py）</td></tr>
+  <tr><td>6. 构建 debug + release APK</td><td>BUILD SUCCESSFUL（19.6 MB / 2.1 MB unsigned）</td><td>dist/mixia-v0.1.0-m2-audited2-*.apk</td></tr>
+  <tr><td>7. 真机自检（最终 APK 重装重跑）</td><td><b>19/19 通过</b>（含真实 SQLite 落盘、防截屏、篡改检测）</td><td>device-files/logcat/selftest-final.txt</td></tr>
+  <tr><td>8. 独立文件复核（不信任程序自报）</td><td>设备拉回 vault.db / journal / blob，6 个明文标记 + 图片字节 <b>0 命中</b></td><td>device-files/</td></tr>
+</table>
+
+<h2>七、交付物</h2>
+<ul>
+  <li><code>dist/mixia-v0.1.0-m2-audited2-debug.apk</code> —— 二轮审核后构建（可直接安装查看 19 项自检）</li>
+  <li><code>dist/mixia-v0.1.0-m2-audited2-release-unsigned.apk</code> —— R8 混淆包（M7 签名）</li>
+  <li><code>app/src/test/.../audit/Audit2RegressionTest.kt</code> —— 11 条二轮回归测试（8 缺陷探测 + 3 正向对照）</li>
+  <li><code>tools/revert_round2_fixes.py</code> —— 对照实验退回脚本（可复现）</li>
+  <li><code>dist/evidence/audit2-20260914/</code> —— before-fix / after-fix / device-files 全套证据</li>
+</ul>
+
+<p class="muted" style="margin-top:36px">密匣 MixiaVault · 第二轮审核 · 2026-09-14/15 · 审核纪律：先让测试红，再修，再对照，再上真机 —— 不做"读一遍然后声称没问题"的审核。</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FPB</string>
+
+    <!-- 伪装图标用的桌面名称：只有启用中的那个别名会出现在桌面上 -->
+    <string name="disguise_notes">备忘录</string>
+    <string name="disguise_calc">计算器</string>
+</resources>

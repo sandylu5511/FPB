@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.crypto.AeadCipherTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-14T10:17:48.206Z" hostname="公司" time="0.019">
+  <properties/>
+  <testcase name="密文被截断无法解密" classname="com.mixia.app.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="密文长度包含 16 字节认证标签" classname="com.mixia.app.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="密文任意一位被改动都无法解密" classname="com.mixia.app.crypto.AeadCipherTest" time="0.003"/>
+  <testcase name="空明文与长明文都能正确处理" classname="com.mixia.app.crypto.AeadCipherTest" time="0.013"/>
+  <testcase name="非法密钥长度被拒绝" classname="com.mixia.app.crypto.AeadCipherTest" time="0.001"/>
+  <testcase name="nonce 被改动就无法解密" classname="com.mixia.app.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="加密后可以解密还原" classname="com.mixia.app.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="AAD 不匹配时解密失败" classname="com.mixia.app.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="换一把密钥无法解密" classname="com.mixia.app.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="相同明文两次加密产生不同密文与 nonce" classname="com.mixia.app.crypto.AeadCipherTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

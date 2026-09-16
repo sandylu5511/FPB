@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.crypto.Base32CrockfordTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-14T22:40:58.563Z" hostname="公司" time="0.009">
+  <properties/>
+  <testcase name="拒绝非规范编码_尾部填充位必须为零" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.001"/>
+  <testcase name="字母表不含易混字符" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.001"/>
+  <testcase name="拒绝非法字符" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="O 归一化为 0 I 与 L 归一化为 1" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.001"/>
+  <testcase name="分隔符与空白被忽略" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.001"/>
+  <testcase name="编码后再解码可以还原原始字节" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.003"/>
+  <testcase name="期望长度不符时返回 null" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="空数组编码为空串" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.001"/>
+  <testcase name="小写输入可被归一化" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="30 字节恰好编码为 48 字符" classname="com.mixia.app.crypto.Base32CrockfordTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

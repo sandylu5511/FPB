@@ -1,0 +1,3 @@
+基线：['com.fpb.vault/.alias.Fpb']
+强制禁用后：['com.fpb.vault/.alias.Fpb']
+自愈后：['com.fpb.vault/.alias.Fpb']

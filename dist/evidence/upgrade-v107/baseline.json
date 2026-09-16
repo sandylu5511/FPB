@@ -1,0 +1,19 @@
+{
+  "versionName": "1.0.6",
+  "versionCode": "7",
+  "firstInstallTime": "2026-09-16 04:56:21",
+  "lastUpdateTime": "2026-09-16 04:56:21",
+  "noteTitle": "UPGRADE_MARK_070",
+  "noteCount": 2,
+  "photoCount": 2,
+  "prefBackupReminder": "1789534724549",
+  "md5": {
+    "files/attachments/561c9565e0a0a1fec2c1bcd43e475494": "8ba1309435f64c0947bcda16efdd18c2",
+    "files/attachments/1a7892322192bc717c35447753e7b172": "17001c35f7774b07dfb3b34895ea0576",
+    "files/profileInstalled": "7f6bbcbee9848eb0e80fcaaa7213a9b2",
+    "files/fpb.key": "9c180869e08e62d911210940e02d779c",
+    "databases/vault.db": "1a33570671eb684a42a2ade93ce88d3c",
+    "databases/vault.db-journal": "d41d8cd98f00b204e9800998ecf8427e",
+    "shared_prefs/fpb_settings.xml": "2f6ca110bd40e4ca4c3594833caa8309"
+  }
+}

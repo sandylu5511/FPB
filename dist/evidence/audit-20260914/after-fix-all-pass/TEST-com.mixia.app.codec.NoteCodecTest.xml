@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.codec.NoteCodecTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-09-14T10:17:48.193Z" hostname="公司" time="0.007">
+  <properties/>
+  <testcase name="账号密码往返一致" classname="com.mixia.app.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="收藏标记往返一致" classname="com.mixia.app.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="未知版本号返回 null" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="空内容与空列表往返一致" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="尾部多余字节导致解码失败" classname="com.mixia.app.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="图片笔记往返一致" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="随机字节不会让解码器抛异常" classname="com.mixia.app.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="中文表情与换行往返一致" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="同一内容编码两次字节完全相同" classname="com.mixia.app.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="超大长度声明不会分配内存而是直接拒绝" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="magic 被破坏后解码失败" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="非法类型码返回 null" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="文字笔记往返一致" classname="com.mixia.app.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="解码器不接受清单格式的字节" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="截断的字节返回 null" classname="com.mixia.app.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="待办清单往返一致" classname="com.mixia.app.codec.NoteCodecTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

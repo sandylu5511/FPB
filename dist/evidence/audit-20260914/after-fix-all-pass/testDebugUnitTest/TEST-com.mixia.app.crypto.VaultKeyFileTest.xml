@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.crypto.VaultKeyFileTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-14T10:17:48.805Z" hostname="公司" time="1.558">
+  <properties/>
+  <testcase name="KDF 参数被原样保留" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.104"/>
+  <testcase name="主密码槽密文被篡改后密码解锁失败但恢复码仍可用" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.196"/>
+  <testcase name="编码结果是确定的_同样输入两次编码长度一致" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.133"/>
+  <testcase name="尾部被追加垃圾字节仍能解码" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.091"/>
+  <testcase name="编码后解码可以正常解锁" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.226"/>
+  <testcase name="版本号不支持时被拒绝" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.11"/>
+  <testcase name="启用与未启用假密码时密钥文件长度一致" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.259"/>
+  <testcase name="magic 不匹配的文件被拒绝" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.094"/>
+  <testcase name="密钥文件中不含任何明文密钥" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.143"/>
+  <testcase name="被截断的文件被拒绝" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.102"/>
+  <testcase name="缺少主密码槽的文件被拒绝" classname="com.mixia.app.crypto.VaultKeyFileTest" time="0.098"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标前景：FPB 渐变字标，几何与 C:/Users/fa_12/Downloads/FPB-gradient-wordmark-logo.svg
+  完全一致（F/P 填充、B 以 12px 渐变描边），只在整体上做了缩放和平移。
+
+  坐标推导：SVG 画布 1200x400，字标实际占 x:80..1158（含 B 描边外扩 6）、y:83..331，
+  即宽 1078、高 248、中心 (619,207)。自适应图标 108dp 画布的安全区是中心直径 66dp
+  的圆；字标是横条，取宽 70dp（= 1200 视口里的 778），在 y 方向 ±9dp 内圆的弦宽
+  sqrt(36^2 - 9^2) * 2 ≈ 70.3dp，恰好放得下 —— 也就是说圆形蒙版裁不到 F 的左缘
+  和 B 的右缘。缩放系数 778/1078 = 0.7215。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1200"
+    android:viewportHeight="1200">
+
+    <group
+        android:scaleX="0.7215"
+        android:scaleY="0.7215"
+        android:translateX="153.28"
+        android:translateY="450.65">
+
+        <!-- F -->
+        <path android:pathData="M80 83h310v72H170v28h180v69H170v65H80Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:startX="80"
+                    android:startY="200"
+                    android:endX="1153"
+                    android:endY="200"
+                    android:type="linear">
+                    <item android:offset="0" android:color="#FFE6FF4F" />
+                    <item android:offset="0.48" android:color="#FF7FE3C2" />
+                    <item android:offset="1" android:color="#FF559CF0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- P -->
+        <path
+            android:fillType="evenOdd"
+            android:pathData="M445 83h184c91 0 141 41 141 111 0 72-50 112-141 112h-94v11h-90Zm90 71v82h88c39 0 58-13 58-42 0-27-19-40-58-40Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:startX="80"
+                    android:startY="200"
+                    android:endX="1153"
+                    android:endY="200"
+                    android:type="linear">
+                    <item android:offset="0" android:color="#FFE6FF4F" />
+                    <item android:offset="0.48" android:color="#FF7FE3C2" />
+                    <item android:offset="1" android:color="#FF559CF0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- B：原 SVG 里带 translate(41,0)，渐变坐标随画布变换整体平移，保持与原文件一致 -->
+        <group android:translateX="41">
+            <path
+                android:pathData="M790.1 325H970.5C1016.7 325 1047.5 320.04 1071.7 308.57C1095.9 297.1 1111.3 278.19 1111.3 259.9C1111.3 237.58 1090.4 219.91 1044.75 205.03C1084.35 190.77 1099.75 177.75 1099.75 158.53C1099.75 142.72 1086 126.6 1063.45 115.44C1039.8 103.97 1011.75 99.01 968.85 99.01H790.1ZM872.6 137.76H962.25C1000.75 137.76 1020.55 146.44 1020.55 163.18C1020.55 180.23 1000.75 188.91 962.25 188.91H872.6ZM872.6 227.66H971.05C1011.2 227.66 1032.1 237.58 1032.1 257.11C1032.1 276.33 1011.2 286.25 971.05 286.25H872.6Z"
+                android:strokeWidth="12"
+                android:strokeLineJoin="round">
+                <aapt:attr name="android:fillColor">
+                    <gradient
+                        android:startX="80"
+                        android:startY="200"
+                        android:endX="1153"
+                        android:endY="200"
+                        android:type="linear">
+                        <item android:offset="0" android:color="#FFE6FF4F" />
+                        <item android:offset="0.48" android:color="#FF7FE3C2" />
+                        <item android:offset="1" android:color="#FF559CF0" />
+                    </gradient>
+                </aapt:attr>
+                <aapt:attr name="android:strokeColor">
+                    <gradient
+                        android:startX="80"
+                        android:startY="200"
+                        android:endX="1153"
+                        android:endY="200"
+                        android:type="linear">
+                        <item android:offset="0" android:color="#FFE6FF4F" />
+                        <item android:offset="0.48" android:color="#FF7FE3C2" />
+                        <item android:offset="1" android:color="#FF559CF0" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+        </group>
+    </group>
+</vector>

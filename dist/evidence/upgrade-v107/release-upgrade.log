@@ -1,0 +1,12 @@
+[13:03:53] 卸载 → 装 v1.0.6 release → 覆盖装 v1.0.7 release
+  [PASS] v1.0.6 release 安装成功
+  [PASS] 装上的确实是 v1.0.6
+  [PASS] v1.0.6 能冷启动到前台
+  [PASS] v1.0.7 release **覆盖安装**成功（签名一致，未被系统拒绝）
+  [PASS] 没有被 INSTALL_FAILED_UPDATE_INCOMPATIBLE 拦住
+  [PASS] 版本升到 1.0.7（versionCode 8）
+  [PASS] firstInstallTime 未变 → 确实是覆盖安装，没有走卸载重装
+  [PASS] v1.0.7 release 冷启动无崩溃
+  [PASS] v1.0.7 release 冷启动后在前台
+
+结果：0 项失败

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.codec.NoteIndexCodecTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-14T22:40:57.332Z" hostname="公司" time="0.002">
+  <properties/>
+  <testcase name="id 列表往返一致" classname="com.mixia.app.codec.NoteIndexCodecTest" time="0.001"/>
+  <testcase name="清单损坏时返回 null 而不是空列表" classname="com.mixia.app.codec.NoteIndexCodecTest" time="0.0"/>
+  <testcase name="尾部多余字节导致失败" classname="com.mixia.app.codec.NoteIndexCodecTest" time="0.001"/>
+  <testcase name="清单中出现非法 id 时返回 null" classname="com.mixia.app.codec.NoteIndexCodecTest" time="0.0"/>
+  <testcase name="空清单往返一致" classname="com.mixia.app.codec.NoteIndexCodecTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

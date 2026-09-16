@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>密匣 · 代码审核报告（M1+M2）</title>
+<style>
+  :root{
+    --bg:#0B0C0F; --panel:#14161B; --panel2:#1A1D24; --line:#272B34;
+    --fg:#E8EAF0; --fg2:#A2A8B8; --fg3:#6E7488;
+    --primary:#9B8CFF; --primary-dim:#5B4BD1;
+    --danger:#FF6B6B; --warn:#FFB454; --ok:#4CD07D; --info:#5AC8E8;
+    --mono:"Cascadia Mono","JetBrains Mono",Consolas,"Courier New",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 28px 96px}
+  header{border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:34px}
+  h1{margin:0 0 10px;font-size:27px;letter-spacing:.3px}
+  h1 .sub{color:var(--fg3);font-weight:400;font-size:16px;margin-left:10px}
+  .meta{color:var(--fg3);font-size:13px;display:flex;gap:22px;flex-wrap:wrap}
+  h2{margin:52px 0 16px;font-size:20px;padding-left:12px;border-left:3px solid var(--primary)}
+  h3{margin:30px 0 10px;font-size:16px;color:var(--fg)}
+  p{margin:10px 0}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--panel2);
+    padding:2px 6px;border-radius:4px;color:#C9C2FF;border:1px solid var(--line)}
+  pre{margin:8px 0;background:#0E1015;border:1px solid var(--line);border-radius:8px;
+    padding:13px 15px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;
+    line-height:1.65;color:#C7CCDA}
+  pre.bad{border-left:3px solid var(--danger)}
+  pre.good{border-left:3px solid var(--ok)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th{text-align:left;padding:9px 11px;background:var(--panel2);color:var(--fg2);
+    font-weight:600;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:hover td{background:rgba(155,140,255,.045)}
+  .tag{display:inline-block;padding:1.5px 8px;border-radius:99px;font-size:11.5px;
+    font-weight:600;white-space:nowrap}
+  .p0{background:rgba(255,107,107,.16);color:var(--danger);border:1px solid rgba(255,107,107,.35)}
+  .p1{background:rgba(255,180,84,.16);color:var(--warn);border:1px solid rgba(255,180,84,.35)}
+  .p2{background:rgba(90,200,232,.14);color:var(--info);border:1px solid rgba(90,200,232,.32)}
+  .ok{background:rgba(76,208,125,.14);color:var(--ok);border:1px solid rgba(76,208,125,.32)}
+  .bug{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+    padding:20px 22px;margin:18px 0}
+  .bug > h3{margin:0 0 4px;font-size:16.5px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .bug .where{color:var(--fg3);font-size:12.5px;font-family:var(--mono);margin-bottom:14px}
+  .four{margin:14px 0 0;display:grid;gap:12px}
+  .four .item{border-left:2px solid var(--line);padding-left:14px}
+  .four .k{font-size:12.5px;color:var(--fg3);font-weight:600;letter-spacing:.4px;margin-bottom:3px}
+  .note{background:rgba(155,140,255,.07);border:1px solid rgba(155,140,255,.22);
+    border-radius:9px;padding:14px 17px;margin:16px 0;font-size:14px}
+  .note.warn{background:rgba(255,180,84,.07);border-color:rgba(255,180,84,.25)}
+  .note.ok{background:rgba(76,208,125,.07);border-color:rgba(76,208,125,.25)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px;margin:18px 0}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 17px}
+  .stat .n{font-size:26px;font-weight:700;line-height:1.2}
+  .stat .l{font-size:12.5px;color:var(--fg3);margin-top:3px}
+  .n.red{color:var(--danger)} .n.green{color:var(--ok)} .n.purple{color:var(--primary)}
+  ul{padding-left:22px;margin:9px 0} li{margin:5px 0}
+  .path{font-family:var(--mono);font-size:12.5px;color:var(--fg2)}
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);
+    color:var(--fg3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>密匣 · 代码审核报告<span class="sub">M1 加密内核 + M2 数据层</span></h1>
+  <div class="meta">
+    <span>审核日期：2026-09-14</span>
+    <span>代码规模：主源码 3,190 行 / 测试 2,045 行</span>
+    <span>结论：<b style="color:var(--danger)">13 处缺陷，全部已修复并验证</b></span>
+  </div>
+</header>
+
+<h2>一、结论摘要</h2>
+
+<div class="grid">
+  <div class="stat"><div class="n red">4</div><div class="l">P0 · 会导致数据丢失或安全约束失效</div></div>
+  <div class="stat"><div class="n" style="color:var(--warn)">4</div><div class="l">P1 · 健壮性 / 正确性</div></div>
+  <div class="stat"><div class="n" style="color:var(--info)">5</div><div class="l">P2 · 一致性 / 次要</div></div>
+  <div class="stat"><div class="n green">13 / 13</div><div class="l">已修复并用测试锁住</div></div>
+</div>
+
+<p>审核方式是<b>先写会失败的测试、跑出失败、再修</b>，而不是"看一遍代码然后声称没问题"。为避免"改完才写的测试自然通过"这种自证，
+另做了一次<b>对照实验</b>：把工程复制一份，只在副本里退回修复，跑同一套测试验证它们确实会红。</p>
+
+<table>
+  <tr><th>验证层次</th><th>内容</th><th>结果</th></tr>
+  <tr>
+    <td>对照实验（副本）</td>
+    <td>退回 4 处修改后跑同一套测试</td>
+    <td><span class="tag p0">5 / 20 失败</span> → 证明测试有效，不是空断言</td>
+  </tr>
+  <tr>
+    <td>修复前（工作区）</td>
+    <td>首次运行本报告新增的探测测试</td>
+    <td><span class="tag p0">8 / 13 失败</span> → 缺陷是测出来的</td>
+  </tr>
+  <tr>
+    <td>修复后 · 单元测试</td>
+    <td>JVM 上跑全部用例</td>
+    <td><span class="tag ok">132 / 132 通过</span>（新增 20 条）</td>
+  </tr>
+  <tr>
+    <td>修复后 · 真机自检</td>
+    <td>Pixel_7 / API 37，真实 ART + Conscrypt + SQLite</td>
+    <td><span class="tag ok">19 / 19 通过</span></td>
+  </tr>
+  <tr>
+    <td>修复后 · 独立复核</td>
+    <td>把数据库文件拉回电脑，用 Python 逐字节搜明文</td>
+    <td><span class="tag ok">0 命中</span>（20,544 字节）</td>
+  </tr>
+</table>
+
+<div class="note">
+  <b>为什么真机那一层不可省：</b>单元测试跑在内存替身上，这次有一处修复（SQLite 事务）<b>在生产代码里执行、却在单元测试里走不到</b>。
+  如果只在电脑上跑测试，这处改动等于完全没验证过。真机自检里的「重新打开后条目与图片完整恢复」这一项，
+  恰好能判定事务是否真的提交了 —— 事务没提交，这一步必然失败。
+</div>
+
+<h2>二、缺陷清单</h2>
+
+<table>
+  <tr><th>#</th><th>级别</th><th>位置</th><th>缺陷</th><th>后果</th></tr>
+  <tr>
+    <td>1</td><td><span class="tag p0">P0</span></td>
+    <td class="path">VaultSession.create</td>
+    <td>笔记行与索引清单两次写入各自独立提交，非原子</td>
+    <td>进程在两次写入之间被杀 → 笔记永久不可见且不被清理，<b>用户无任何提示</b></td>
+  </tr>
+  <tr>
+    <td>2</td><td><span class="tag p0">P0</span></td>
+    <td class="path">VaultSession.delete</td>
+    <td>先删图片密文，再删行与清单</td>
+    <td>后续任一步失败 → <b>图片不可逆丢失</b>，条目却还在</td>
+  </tr>
+  <tr>
+    <td>3</td><td><span class="tag p0">P0</span></td>
+    <td class="path">VaultKeyring.withExternalWrap</td>
+    <td>外部 KEK 写入槽位时缺少域校验</td>
+    <td>诱饵 DEK 可被写进主密码槽 → <b>"输着真密码进假库"</b>，私密内容写进准备给人看的库</td>
+  </tr>
+  <tr>
+    <td>4</td><td><span class="tag p0">P0</span></td>
+    <td class="path">NoteIndexCodec.encode</td>
+    <td>条目数上限只拦解码、不拦编码</td>
+    <td>超过 10 万条时清单顺利落盘却<b>再也解不回来</b> → 每次解锁都拒绝，数据彻底锁死</td>
+  </tr>
+  <tr>
+    <td>5</td><td><span class="tag p1">P1</span></td>
+    <td class="path">KdfParams.init</td>
+    <td>内存开销与迭代次数只有下界、没有上界</td>
+    <td>伪造的备份文件可让解锁抛 <code>OutOfMemoryError</code>（属 Error，<code>catch(Exception)</code> 接不住）或永久卡死</td>
+  </tr>
+  <tr>
+    <td>6</td><td><span class="tag p1">P1</span></td>
+    <td class="path">Base32Crockford.decodeOrNull</td>
+    <td>合法恢复码后多打一个 <code>0</code> 仍被接受</td>
+    <td>同一恢复码存在无穷多个等价写法，违反"长度不符即拒绝"的契约</td>
+  </tr>
+  <tr>
+    <td>7</td><td><span class="tag p1">P1</span></td>
+    <td class="path">VaultKeyFileCodec.decode</td>
+    <td>不校验槽位密文长度；重复槽位号静默覆盖</td>
+    <td>结构非法的密钥文件被接受，把"文件损坏"伪装成"密码错误"</td>
+  </tr>
+  <tr>
+    <td>8</td><td><span class="tag p1">P1</span></td>
+    <td class="path">NoteCodec.readString / readList</td>
+    <td>按长度字段预分配内存，未对照剩余字节数</td>
+    <td>几十字节的输入即可触发最大 4 MB 分配（内存放大）</td>
+  </tr>
+  <tr>
+    <td>9</td><td><span class="tag p2">P2</span></td>
+    <td class="path">NotePayload.normalized</td>
+    <td>先去重、后截断</td>
+    <td>仅在第 32 字符后不同的标签截断后重复 → 界面出现重复标签、计数错误</td>
+  </tr>
+  <tr>
+    <td>10</td><td><span class="tag p2">P2</span></td>
+    <td class="path">VaultSession.update</td>
+    <td>未调用 <code>requireUnlocked()</code></td>
+    <td>锁定时静默返回 <code>null</code>，调用方误判为"条目不存在"（<code>delete</code> 却抛异常，同类两套语义）</td>
+  </tr>
+  <tr>
+    <td>11</td><td><span class="tag p2">P2</span></td>
+    <td class="path">VaultSession.unlock</td>
+    <td>首行无条件调用 <code>lock()</code>，会先发出一次 LOCKED 回调</td>
+    <td>重复解锁时回调序列变成 <code>LOCKED→UNLOCKED</code>，界面闪回解锁页</td>
+  </tr>
+  <tr>
+    <td>12</td><td><span class="tag p2">P2</span></td>
+    <td class="path">FileBlobStore</td>
+    <td>崩溃残留的 <code>.part</code> 文件无人回收</td>
+    <td>不满足 id 形状 → <code>listIds()</code> 看不见 → 孤儿清理永远扫不到，永久占空间</td>
+  </tr>
+  <tr>
+    <td>13</td><td><span class="tag p2">P2</span></td>
+    <td class="path">InMemoryBlobSink.read</td>
+    <td>测试替身返回内部实例而非副本（与 <code>write</code> 不一致）</td>
+    <td>测试里一次就地修改会直接改到"落盘"内容，可能掩盖真实缺陷</td>
+  </tr>
+</table>
+
+<h2>三、逐条详情</h2>
+
+<!-- ============ 1 ============ -->
+<div class="bug">
+  <h3>#1 写入不是原子的：笔记行与索引清单各自提交 <span class="tag p0">P0</span></h3>
+  <div class="where">VaultSession.kt · create() / update() / delete()</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前</div>
+      <pre class="bad">val id = idFactory()
+writeNote(id, normalized)      // 第 1 次提交
+indexPut(id, normalized)
+persistIndex()                 // 第 2 次提交 —— 中间被杀就完了</pre>
+    </div>
+    <div class="item">
+      <div class="k">改后</div>
+      <pre class="good">indexPut(id, normalized)       // 内存先更新（persistIndex 依赖 index.keys）
+try {
+    rows.inTransaction {       // ← 两次写入合成一次原子提交
+        writeNote(id, normalized)
+        persistIndex()
+    }
+} catch (t: Throwable) {
+    indexRemove(id)            // 落盘失败则连内存一起撤回
+    throw t
+}</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      改前：应用被系统回收的瞬间若正好在写盘，会出现"我明明记过的内容不见了"，且此后永远找不回、磁盘空间也一直被占着。
+      改后：要么完整写入，要么完全没写 —— 用户最多重记一次，不会留下"幽灵数据"。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      这是"数据只存在本机"类应用最不能接受的故障类型：静默、不可逆、无法归因。
+      触发条件（低内存被杀、用户划掉任务、系统回收）在日常使用中并不罕见。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 2 ============ -->
+<div class="bug">
+  <h3>#2 删除顺序把唯一不可再生的数据排在最前 <span class="tag p0">P0</span></h3>
+  <div class="where">VaultSession.kt · delete()</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前</div>
+      <pre class="bad">existing.images.forEach { blobs.delete(it.blobId) }  // ① 先删图片密文
+rows.delete(id)                                      // ②
+indexRemove(id)                                      // ③
+persistIndex()                                       // ④ 这里失败 = 图已没了、条目还在</pre>
+    </div>
+    <div class="item">
+      <div class="k">改后</div>
+      <pre class="good">indexRemove(id)
+try {
+    rows.inTransaction { rows.delete(id); persistIndex() }   // 可回滚的部分先做完
+} catch (t: Throwable) { indexPut(id, existing); throw t }
+
+// 图片密文最后删 —— 失败了也只留下可被 purgeOrphanBlobs 扫掉的孤儿文件
+existing.images.forEach { blobs.delete(it.blobId) }</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      改前：删除一次带照片的条目，若中途出错，用户看到"条目还在、照片全打不开"，且没有恢复途径。
+      改后：要么整条干净删除，要么原样保留（顶多多几个可以被清理掉的孤儿文件）。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      笔记正文可以从别处誊抄，<b>已加密的照片删掉就是没了</b>。
+      删除顺序应当按"可恢复性"从低到高排，而不是按直觉的"先清大文件"。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 3 ============ -->
+<div class="bug">
+  <h3>#3 域校验只写在密码路径上，外部 KEK 路径漏了 <span class="tag p0">P0</span></h3>
+  <div class="where">VaultKeyring.kt · withExternalWrap()（M4 生物识别将走这条路径）</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前</div>
+      <pre class="bad">fun withExternalWrap(slot: KeySlot, rawKek: ByteArray, dek: VaultDek): VaultKeyring {
+    require(rawKek.size == AeadCipher.KEY_BYTES) { ... }
+    // ← 没有校验 dek.domain
+    return VaultKeyring(params, wraps + (slot to wrapDek(dek, kek, slot)))
+}</pre>
+      <p style="color:var(--fg3);font-size:13px;margin:6px 0 0">
+        对比密码路径 <code>wrapWithPassword</code> 里是有 <code>require(dek.domain == ...)</code> 的。</p>
+    </div>
+    <div class="item">
+      <div class="k">改后</div>
+      <pre class="good">// 文件级、单一来源，两条路径共用
+private fun domainOfSlot(slot: KeySlot): VaultDomain =
+    if (slot == KeySlot.DECOY) VaultDomain.DECOY else VaultDomain.REAL
+
+private fun requireDomainMatches(slot: KeySlot, dek: VaultDek) {
+    val expected = domainOfSlot(slot)
+    require(dek.domain == expected) {
+        "DEK 所属域（${dek.domain}）与槽位 $slot 不匹配（应为 $expected），拒绝写入"
+    }
+}
+// withExternalWrap / rewrapRecovery / wrapWithPassword 三处统一调用它</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      正常使用下无感。但一旦 M4 接生物识别时写错参数，改前就是"开启指纹后输入真实主密码进了诱饵库"，
+      用户以为在记私密内容，实际全部写进了准备给攻击者看的那个库。改后这种写法在开发阶段就会直接抛错。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      这正是 <code>VaultDomain</code> 这个类型被造出来要防的事故。同一个约束写在两处（一处漏了）说明
+      <b>约束本身没有单一入口</b> —— 已提取为共用函数，从结构上消除第二次遗漏的可能。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 4 ============ -->
+<div class="bug">
+  <h3>#4 上限只在解码侧生效，会导致保险库彻底锁死 <span class="tag p0">P0</span></h3>
+  <div class="where">NoteIndexCodec.kt · encode() / decode()</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前</div>
+      <pre class="bad">private const val MAX_ENTRIES = 100_000     // 私有，且只在 decode 里用
+
+fun encode(ids: List<String>): ByteArray {  // ← 不检查，多少条都照写
+    val out = ByteArrayOutputStream(8 + ids.size * 36)
+    ...
+}
+
+// decode(): if (count &lt; 0 || count &gt; MAX_ENTRIES) return null</pre>
+    </div>
+    <div class="item">
+      <div class="k">改后</div>
+      <pre class="good">/** 必须两侧同时生效。只拦解码的后果最糟：写出去的清单自己再也解不回来。 */
+const val MAX_ENTRIES = 100_000
+
+fun encode(ids: List<String>): ByteArray {
+    require(ids.size &lt;= MAX_ENTRIES) {
+        "清单条目数 ${ids.size} 超过上限 $MAX_ENTRIES，拒绝写出无法解读的清单"
+    }
+    ...
+}
+
+// VaultSession.create 里在动任何数据之前先拒：
+private fun requireManifestCapacity(adding: Int) {
+    if (index.size + adding &gt; NoteIndexCodec.MAX_ENTRIES) throw IllegalStateException(...)
+}</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      改前：条目涨到 10 万条那一刻，清单写下去了，从下次启动起每次解锁都提示"索引清单无法解读"，
+      全部数据锁死、没有任何补救途径 —— 这是本报告里后果最严重的一条。
+      改后：在第 100,001 条时立刻拒绝并给出明确提示"条目数量已达上限，请删除部分条目"。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      概率极低（要 10 万条笔记），但后果不可逆。这类"写入侧比读取侧宽松"的不对称校验，
+      在带自校验的格式里是一个通用反模式：<b>凡是解码会拒绝的东西，编码就不该产出。</b>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 5 ============ -->
+<div class="bug">
+  <h3>#5 KDF 参数没有上界：伪造备份文件可致崩溃 <span class="tag p1">P1</span></h3>
+  <div class="where">KdfParams.kt · init 块（参数来源是密钥文件，M5 导入功能的入口）</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前</div>
+      <pre class="bad">require(memoryKiB &gt;= MIN_MEMORY_KIB) { "内存开销过低：$memoryKiB KiB" }
+require(iterations &gt;= 1) { "迭代次数至少为 1" }
+// 没有上界</pre>
+    </div>
+    <div class="item">
+      <div class="k">改后</div>
+      <pre class="good">require(memoryKiB in MIN_MEMORY_KIB..MAX_MEMORY_KIB) { ... }   // 上界 1 GiB
+require(iterations in 1..MAX_ITERATIONS) { ... }                // 上界 64
+
+const val MAX_MEMORY_KIB = 1024 * 1024
+const val MAX_ITERATIONS = 64</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      正常使用无感（预设三档最高 256 MiB / t=4，远在上界内）。
+      差别在于：从网盘下载一个被构造过的备份包导入时，改前是应用当场闪退且给不出原因，
+      改后是抛出一句可理解的"内存开销越界：2147483647 KiB"。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      Argon2 的内存开销是它抗暴破的来源，也让它成为一条<b>内存分配放大通道</b>：
+      一个几十字节的文件声明 2 TiB，代价由我们承担。
+      这里要特别注意 <code>OutOfMemoryError</code> 属于 <code>Error</code> 而非 <code>Exception</code> ——
+      <code>VaultKeyFileCodec.decode</code> 里的 <code>catch (Exception)</code> 根本接不住它。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 6 ============ -->
+<div class="bug">
+  <h3>#6 恢复码的"等价别名"：多打一个 <code>0</code> 也能解开 <span class="tag p1">P1</span></h3>
+  <div class="where">Base32Crockford.kt · decodeOrNull()（影响 VaultKeyring.unlockWithRecoveryCode）</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前</div>
+      <pre class="bad">if (bitsLeft &gt; 0 &amp;&amp; buffer != 0) return null        // ① 残留位全为 0 就放过
+if (expectedBytes != null &amp;&amp; written != expectedBytes) return null   // ② 只看解出几个字节
+
+// 于是：48 字符恢复码 + 一个 '0'
+//   → 245 位，解出仍是 30 字节（② 通过）
+//   → 多出的 5 位恰好是 '0' = 00000（① 通过）
+//   → 输入被接受，多打的字符被静默吞掉</pre>
+    </div>
+    <div class="item">
+      <div class="k">改后</div>
+      <pre class="good">if (expectedBytes != null) {
+    if (written != expectedBytes) return null
+
+    // 反查规范化：挡掉"字节数对得上、字符数却多出来"的别名输入。
+    // normalize() 已把输入归一到规范大写，因此这次比较同时覆盖了字符数是否正确。
+    if (!encode(out).contentEquals(cleaned)) return null
+}</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      正常抄对 48 字符 → 无差别。抄错长度（多打、少打）→ 改前偶发"竟然能过"，改后稳定报"恢复码无效"。
+      这不会让正确输入被拒（48 字符 240 位整除 5，任何合法输入的往返编码都等于自身）。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      密码学上没有削弱（解出的仍是同一把 DEK），危害在于<b>契约失效</b>：
+      "长度不符即拒绝"这条规则被绕过，输入框的即时校验也就失去了意义。
+      恢复码是"用户会手抄、手输"的东西，这一类宽松必须是零。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 7 ============ -->
+<div class="bug">
+  <h3>#7 密钥文件不校验槽位密文长度；重复槽位静默覆盖 <span class="tag p1">P1</span></h3>
+  <div class="where">VaultKeyFile.kt · decode()</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前</div>
+      <pre class="bad">val ciphertextLength = input.readUnsignedShort()
+if (ciphertextLength &lt;= 0 || ciphertextLength &gt; MAX_CIPHERTEXT_BYTES) throw ...  // 区间校验
+
+wraps[slot] = WrappedKey(slot, nonce, ciphertext)   // 同槽位号重复出现 = 后一个覆盖前一个
+
+// 另外：WrappedKey.EXPECTED_CIPHERTEXT_BYTES 定义了却从未被使用
+//       MAX_CIPHERTEXT_BYTES 这个 1024 的上界是个没人验证过的猜测值</pre>
+    </div>
+    <div class="item">
+      <div class="k">改后</div>
+      <pre class="good">// 槽位密文长度是固定的（32 字节 DEK + 16 字节 GCM 标签）→ 用等值校验
+if (ciphertextLength != WrappedKey.EXPECTED_CIPHERTEXT_BYTES) throw VaultKeyFileException(...)
+
+if (wraps.containsKey(slot)) throw VaultKeyFileException("槽位 $slot 在文件中重复出现")
+
+// encode 侧同样加上等值校验</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      无正常路径差异。差别在文件损坏/被篡改时：改前是"解密失败 = 密码错误"（用户会去反复试密码），
+      改后是"第 1 个槽位的密文长度异常：16（应为 48）"—— 直接告诉用户这是文件坏了，该去用备份。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      区间校验的盲区是"长度合法但结构不对"：它能被解析出来，却永远解不开，
+      把一次文件损坏伪装成一次密码错误。而重复槽位用"后者覆盖前者"处理，
+      会让伪造文件的结果取决于写入顺序 —— 校验通过、解锁失败，失败原因无从判断。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 8 ============ -->
+<div class="bug">
+  <h3>#8 解码器按长度字段预分配，未对照剩余字节数 <span class="tag p1">P1</span></h3>
+  <div class="where">NoteCodec.kt · readString() / readList()</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前</div>
+      <pre class="bad">val length = input.readInt()
+if (length &lt; 0 || length &gt; MAX_STRING_BYTES) throw ...   // 只比上限（4 MB）
+val buffer = ByteArray(length)                           // ← 先分配，再在 readFully 里失败</pre>
+    </div>
+    <div class="item">
+      <div class="k">改后</div>
+      <pre class="good">// 长度字段声称的字节数不能超过流里剩下的字节数
+if (length &gt; input.available()) {
+    throw IllegalArgumentException("字符串长度超出剩余数据: $length（剩余 ${input.available()}）")
+}
+val buffer = ByteArray(length)
+
+// readList 同理：每个元素至少占 1 字节，count &gt; available 必然不成立
+if (count &gt; input.available()) throw IllegalArgumentException(...)</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      无。这是纯防御性加固 —— "最后能正常读出来的内容"在改前改后完全一致，改的是失败路径上的资源开销。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      当前不可被外部利用（明文经过 GCM 认证，攻击者改不了），
+      但它挡的是"我们自己的编码 bug 或一次不当的数据迁移"变成内存放大的可能。代价为零的校验没有理由不加。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 9-13 ============ -->
+<div class="bug">
+  <h3>#9 标签先去重、后截断 <span class="tag p2">P2</span></h3>
+  <div class="where">NotePayload.kt · normalized()</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前 / 改后</div>
+      <pre class="bad">tags.map { it.trim() }.filter { it.isNotEmpty() }
+    .distinct()              // ← 先判重：两个标签此时还"不同"
+    .take(MAX_TAGS)
+    .map { it.take(MAX_TAG_CHARS) }   // ← 再截断：截完变得一模一样</pre>
+      <pre class="good">tags.map { it.trim() }.filter { it.isNotEmpty() }
+    .map { it.take(MAX_TAG_CHARS) }   // 先收敛到最终落盘的样子
+    .distinct()                        // 再判重
+    .take(MAX_TAGS)</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      输入两个仅在第 32 字之后不同的标签（例如从某处粘贴的长标签稍作改动），
+      改前会出现两个完全相同的标签按钮、标签计数被算成 2；改后正确合并为一个。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      影响面小、可自查（看得见），但属于"收敛与判重的顺序"这类容易复发的写法问题 —— 已在代码里写明顺序不能颠倒的理由。
+    </div>
+  </div>
+</div>
+
+<div class="bug">
+  <h3>#10 <code>update()</code> 缺少解锁前置检查，锁定时静默返回 <code>null</code> <span class="tag p2">P2</span></h3>
+  <div class="where">VaultSession.kt · update()</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前 / 改后</div>
+      <pre class="bad">fun update(id: String, payload: NotePayload): VaultNote? {
+    val existing = index[id] ?: return null   // 锁定时索引已清空 → 走到这里就返回 null
+    ...</pre>
+      <pre class="good">fun update(id: String, payload: NotePayload): VaultNote? {
+    requireUnlocked()                          // 与 delete() 保持同一套语义
+    val existing = index[id] ?: return null
+    ...</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      改前：会话到期后用户点了保存，界面提示"条目不存在"或"保存失败"——而真实原因是保险库已锁定。
+      改后：界面能拿到明确的 <code>LockedException</code>，可以正确地引导用户"会话已锁定，请重新解锁"。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      让调用方基于错误的事实做判断（把"锁着"当成"不存在"，可能触发误删或误建逻辑）。
+      同一个类里 <code>delete</code> 抛异常、<code>update</code> 返回 null，两套语义本身就是缺陷。
+    </div>
+  </div>
+</div>
+
+<div class="bug">
+  <h3>#11 重复解锁会先发一次 LOCKED 回调 <span class="tag p2">P2</span></h3>
+  <div class="where">VaultSession.kt · unlock() / lock()</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前 / 改后</div>
+      <pre class="bad">fun unlock(outcome): LoadReport {
+    lock()          // ← 之前是解锁态时，这里会发出 LOCKED 回调
+    ...
+    onStateChanged?.invoke(State.UNLOCKED)
+}
+// 回调序列：LOCKED → UNLOCKED</pre>
+      <pre class="good">private fun clearState() { /* 只清理，不发回调 */ }
+
+fun unlock(outcome): LoadReport {
+    val wasUnlocked = dek != null
+    clearState()                     // ← 内部清理不该伪装成状态迁移
+    ...
+    if (!wasUnlocked) onStateChanged?.invoke(State.UNLOCKED)
+}
+// 重复解锁回调序列：UNLOCKED（仅一次）</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      改前：界面重建或解锁失败后重试时，可能看到一次"跳回解锁页又立刻跳回来"的闪回。
+      改后不会。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      M3 会把这个回调直接接到导航逻辑上（LOCKED → 跳解锁页），闪回就会变成可见的界面抖动。
+      现在改比之后在界面层打补丁便宜。
+    </div>
+  </div>
+</div>
+
+<div class="bug">
+  <h3>#12 崩溃残留的半截附件文件无人回收 <span class="tag p2">P2</span></h3>
+  <div class="where">FileBlobStore.kt · purgeStaleTempFiles()（新增）</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前 / 改后</div>
+      <pre class="bad">// write(): 先写 &lt;blobId&gt;.part，再改名
+// listIds(): filter { RowIds.isValid(it.name) }   ← ".part" 不满足形状，被过滤掉
+// 结果：临时文件既不在 listIds() 里、也不满足任何清理判据 → 永久残留</pre>
+      <pre class="good">// BlobSink 新增（默认实现返回 0，内存替身无需关心）
+fun purgeStaleTempFiles(): Int = 0
+
+// FileBlobStore 实现，并由 VaultSession.purgeOrphanBlobs() 调用
+override fun purgeStaleTempFiles(): Int {
+    val stale = rootDir.listFiles()?.filter { it.isFile &amp;&amp; it.name.endsWith(TEMP_SUFFIX) } ?: return 0
+    var removed = 0; stale.forEach { if (it.delete()) removed++ }; return removed
+}</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      改前：应用被强杀（OOM / 划掉任务）恰好发生在保存大图时，该图的一半数据永久占着空间，
+      而"清理垃圾"功能自称清理完了却对这个文件无能为力。改后会被一并回收。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      单次泄漏量小（一张图的体积），但会累积，而且用户看不见、清不掉。
+      根因是"清理的判据"与"命名的规则"不一致：凡是被特意排除在某个集合之外的文件，都要有人负责回收。
+    </div>
+  </div>
+</div>
+
+<div class="bug">
+  <h3>#13 测试替身 <code>read()</code> 返回内部实例而非副本 <span class="tag p2">P2</span></h3>
+  <div class="where">Fakes.kt · InMemoryBlobSink</div>
+  <div class="four">
+    <div class="item">
+      <div class="k">改前 / 改后</div>
+      <pre class="bad">override fun write(...) { map[blobId] = EncryptedBlob(nonce.copyOf(), ciphertext.copyOf()) }
+override fun read(blobId) = map[blobId]?.let { EncryptedBlob(it.nonce, it.ciphertext) }  // ← 暴露内部实例</pre>
+      <pre class="good">override fun read(blobId) =
+    map[blobId]?.let { EncryptedBlob(it.nonce.copyOf(), it.ciphertext.copyOf()) }  // 与 write 语义一致</pre>
+    </div>
+    <div class="item">
+      <div class="k">用户感知差异</div>
+      无（只影响测试）。但它是一个"测试假通过"的来源：
+      测试里一次不经意的就地修改会直接改到存储内容，让断言失去意义。
+    </div>
+    <div class="item">
+      <div class="k">风险</div>
+      与 #1 同一类问题的一体两面 —— <b>测试替身的语义必须和生产实现一致，否则它掩盖的正是它该暴露的东西。</b>
+      顺带说明：这次为 #1/#2 加的 <code>InMemoryRowStore.inTransaction</code> 是<b>真实的快照回滚</b>而不是空实现，
+      因为替身若不回滚，"写入原子性"这条测试即使生产代码是错的也会通过。
+    </div>
+  </div>
+</div>
+
+<h2>四、未修改但需知晓的 6 项</h2>
+
+<p>以下是审核中发现、但<b>刻意不改</b>的点。它们要么是有明确理由的设计权衡，要么归属 M3/M5 的界面与管线工作。</p>
+
+<table>
+  <tr><th>项</th><th>现状</th><th>为什么现在不动</th></tr>
+  <tr>
+    <td><b>清单行缺失 = 全新库</b><br><span class="path">VaultSession.loadIndex</span></td>
+    <td>清单行不存在时一律当作空库，不报"不可读"。</td>
+    <td><b>不可修的模糊判断。</b>真库与诱饵库的行混在同一张表里、形状完全一致，"清单丢了"和"这是新库"在字节层面无法区分。
+      若改成"库里有行就拒绝解锁"，会直接误伤<b>诱饵库第一次被打开</b>的场景（真库有行、诱饵库还没写过 → 假密码打不开），
+      等于把胁迫防护废掉。真正关掉这个窗口的是 #1 的写入原子性。<b>已在代码里写明这段权衡。</b></td>
+  </tr>
+  <tr>
+    <td><b>AAD 拼接歧义</b><br><span class="path">Aad.entryField</span></td>
+    <td><code>"mixia:v1:entry:$id:$field"</code>，若 id 本身含 <code>:</code>，两组不同的 (id, field) 会产生相同 AAD。</td>
+    <td>当前所有 entryId 都来自 <code>RowIds</code>（严格 32 位十六进制），<b>不可达</b>。
+      但接口本身没有约束 —— M3/M5 若在此处传入非 id 值需注意。建议后续给长度加前缀或加 <code>require</code>。</td>
+  </tr>
+  <tr>
+    <td><b>会话非线程安全</b><br><span class="path">VaultSession</span></td>
+    <td><code>index</code> / <code>searchCache</code> 无同步。</td>
+    <td>按设计应由界面层单线程访问。<b>M3 必须把会话访问收敛到单一调度器</b>，不要直接在主线程外的多个协程里并发调用。</td>
+  </tr>
+  <tr>
+    <td><b>图片字节数无上限</b><br><span class="path">VaultSession.putImage</span></td>
+    <td>任意大小的字节都能加密入库。</td>
+    <td>重编码与压缩属 M3 的图片管线职责（长边 2048 / JPEG q85）。建议管线里同时设一个体积硬上限（如 20 MB），防止一次误操作写入超大 blob。</td>
+  </tr>
+  <tr>
+    <td><b>搜索每按键全量排序</b><br><span class="path">VaultSession.search</span></td>
+    <td>每次调用都走 <code>notes()</code>：新建列表 + 全量排序，再过滤。</td>
+    <td>几百条无感，几千条会有可感知的延迟。建议 M3 把"已排序列表"缓存起来，写入时失效。</td>
+  </tr>
+  <tr>
+    <td><b>release lint 门禁仍关闭</b><br><span class="path">app/build.gradle.kts</span></td>
+    <td><code>checkReleaseBuilds = false</code>。</td>
+    <td>本机只有 JDK 25，AGP 8.7.3 的 Lint 解析版本号时崩溃（<code>IllegalArgumentException: 25.0.2</code>）。属已知环境问题，M7 装 JDK 21 或升 AGP 后重新开启。</td>
+  </tr>
+</table>
+
+<h2>五、确认无误的部分</h2>
+
+<p>审核不只找问题。以下是逐行读过并确认设计正确的关键点：</p>
+
+<table>
+  <tr><th>检查项</th><th>结论</th></tr>
+  <tr><td>解锁耗时与密码类型无关</td><td><span class="tag ok">正确</span> <code>unlock()</code> 对主密码槽与诱饵槽<b>都</b>尝试解包、不短路，未启用假密码时也写入等长占位槽 —— 无法从耗时或文件结构判断设备是否设了假密码</td></tr>
+  <tr><td>AAD 绑定槽位与条目</td><td><span class="tag ok">正确</span> 一次密文搬运就会解密失败，防止把假密码槽的包裹复制到主密码槽</td></tr>
+  <tr><td>常量时间比较</td><td><span class="tag ok">正确</span> 所有密钥/标签比较走 <code>MessageDigest.isEqual</code>，无短路</td></tr>
+  <tr><td>未申请 INTERNET 权限</td><td><span class="tag ok">正确</span> 系统层面不具备联网能力，可被第三方用 <code>aapt2 dump permissions</code> 验证</td></tr>
+  <tr><td><code>allowBackup="false"</code></td><td><span class="tag ok">正确</span> 密文库不会被云备份带走</td></tr>
+  <tr><td><code>FLAG_SECURE</code></td><td><span class="tag ok">正确</span> 从 M0 就开着；副作用是截图全黑、<code>uiautomator</code> 抓不到界面树</td></tr>
+  <tr><td>R8 裁剪</td><td><span class="tag ok">正确</span> 只保留 BouncyCastle 的 Argon2 部分（20 个类），未误删加密内核</td></tr>
+  <tr><td>数据库无明文字段</td><td><span class="tag ok">正确</span> 表只有 <code>id / nonce / ciphertext</code> 三列（另有一张系统自动创建的 <code>android_metadata</code>，只存 locale，不含应用数据）</td></tr>
+  <tr><td>EXIF / 原始文件名</td><td><span class="tag ok">正确</span> 图片重编码后入库、文件名用随机 id，均不落盘</td></tr>
+</table>
+
+<h2>六、验证证据</h2>
+
+<div class="note ok">
+  <b>证据全部保留在磁盘上，可自行复核：</b><br>
+  <span class="path">D:\MixiaVault\dist\evidence\audit-20260914\</span>
+  <ul>
+    <li><span class="path">before-fix-4of5\</span> — 对照实验（副本退回 4 处修复）的测试报告，5 个失败</li>
+    <li><span class="path">before-fix-report-html\</span> — 同上，可直接用浏览器打开的 HTML 报告</li>
+    <li><span class="path">after-fix-all-pass\</span> — 修复后 132 个用例全通过的原始报告（XML）</li>
+    <li><span class="path">device-files\</span> — 从模拟器拉回的真实 SQLite 数据库与附件密文，用于独立 grep</li>
+  </ul>
+</div>
+
+<h3>真机自检（Pixel_7 / API 37，19 / 19 通过）</h3>
+
+<table>
+  <tr><th>检查项</th><th>结果</th></tr>
+  <tr><td>Argon2id 标准档派生（64 MiB / t=3 / p=2）</td><td>预热后单次 <b>877 ms</b>（冷启动另有开销，M3 做预热）</td></tr>
+  <tr><td>真实 SQLite：写入四类条目 + 一张图片并落盘</td><td>写入 4 条，连接已关闭</td></tr>
+  <tr><td>磁盘上的 db / journal / 附件里搜不到明文</td><td>扫描 20,544 字节，6 个文本标记与图片字节<b>全部 0 命中</b></td></tr>
+  <tr><td>重新打开后条目与图片完整恢复</td><td>4 条恢复，问题项 0，图片还原 = true &nbsp;<b>（这条同时验证了事务真的提交）</b></td></tr>
+  <tr><td>真库与诱饵库混在同一张表里但互相看不见</td><td>诱饵库见 1 条、真库见 4 条，表里实际混存 7 行</td></tr>
+  <tr><td>篡改一条密文后被标记为不可读而非静默消失</td><td>不可读 1 条，其余 3 条正常</td></tr>
+  <tr><td>自动锁定：超时后密钥清零且读取被拒</td><td>未超时保持解锁、到点锁定、锁定后读取被拒 全部成立</td></tr>
+</table>
+
+<h3>独立复核：拉回电脑逐字节搜明文</h3>
+
+<pre>扫描 20544 字节（selftest_vault.db 20480 + 1 个附件 64）
+  自检明文标记-ALPHA-741852                命中 0
+  自检正文标记-BRAVO-963741                命中 0
+  自检标签-CHARLIE                        命中 0
+  自检待办-DELTA                          命中 0
+  自检密码-ECHO-13579                     命中 0
+  密码（字段名本身）                        命中 0
+  自检图片条目                             命中 0
+  SELFTEST-IMAGE-MARKER-FOXTROT-528491    命中 0
+明文泄漏总计: 0
+
+数据库对象：
+  [table] cipher_rows  →  CREATE TABLE cipher_rows (
+                             id TEXT PRIMARY KEY NOT NULL,
+                             nonce BLOB NOT NULL,
+                             ciphertext BLOB NOT NULL)
+  [table] android_metadata  →  CREATE TABLE android_metadata (locale TEXT)   ← 系统自动创建，只含 locale
+
+行数 7（2 份清单 + 4 条真库笔记 + 1 条诱饵笔记）
+抽样：2d20ee6232ff096434d741977541749f  nonce 12 字节  密文 119 字节</pre>
+
+<h2>七、下一步</h2>
+
+<table>
+  <tr><th>顺序</th><th>内容</th><th>备注</th></tr>
+  <tr>
+    <td><b>M3</b></td>
+    <td>按已冻结的靛紫原型实现界面：设密码 → 恢复码抄写 → 解锁 → 列表 → 四类编辑器 → 设置页</td>
+    <td>必须带上：启动时后台预热 KDF（否则首次解锁等 0.9 秒以上）、图片重编码去 EXIF 管线、会话访问收敛到单一调度器</td>
+  </tr>
+  <tr>
+    <td>M4</td>
+    <td>指纹解锁（Keystore 硬件密钥）、防截屏、剪贴板清理</td>
+    <td>走 <code>withExternalWrap</code> 路径 —— 本次已补上域校验并有测试覆盖</td>
+  </tr>
+  <tr>
+    <td>M5</td>
+    <td>导出/导入加密备份</td>
+    <td>导入是本次 #5（KDF 参数上界）的入口，已有防护与测试</td>
+  </tr>
+  <tr>
+    <td>M7</td>
+    <td>签名打包 release</td>
+    <td>顺带解决 JDK 25 / Lint 的兼容问题并把 lint 门禁开回来</td>
+  </tr>
+</table>
+
+<footer>
+  审核对象：<span class="path">D:\MixiaVault</span>（Kotlin + Compose，minSdk 26 / targetSdk 35）<br>
+  报告生成：2026-09-14 · 全部结论均附可复现的测试或文件证据
+</footer>
+
+</div>
+</body>
+</html>

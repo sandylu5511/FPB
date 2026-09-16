@@ -1,0 +1,23 @@
+--------- beginning of main
+09-15 01:24:24.152  7533  7594 I MixiaSelfTest: SELFTEST ARTIFACT db=/data/user/0/com.mixia.app/databases/selftest_vault.db bytes=20480
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST ARTIFACT blobs=/data/user/0/com.mixia.app/cache/selftest-vault files=1
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | Argon2id 标准档派生（64 MiB / t=3 / p=2） | 预热后单次派生 32 字节 KEK 耗时 688 ms | 1724ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 创建密钥环（主密码 + 假密码 + 恢复码） | 槽位 PRIMARY, DECOY, RECOVERY，恢复码 48 字符（12 组） | 741ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 主密码解锁并取回同一把 DEK | 解出的 DEK 与创建时一致 | 269ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 错误密码被拒绝 | 已拒绝，且未泄漏任何信息 | 265ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 假密码进入诱饵库且 DEK 与真库不同 | 域=DECOY，DEK 与真库不同=true | 249ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 诱饵库 DEK 无法解开真库内容 | 两个库已物理隔离 | 288ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 恢复码还原真库 DEK | 与主密码解出的 DEK 一致 | 240ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 恢复码容错（小写 + 连字符 + 把 0 抄成 o） | 抄错的字符已被自动纠正 | 254ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 改主密码：新密码可用 / 旧密码失效 / DEK 不变 | 旧密码已失效=true，DEK 未变=true（已有内容无需重新加密） | 763ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 改密码后恢复码依然可用 | 恢复码未受影响 | 496ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 密钥文件编解码往返（落盘格式） | 246 字节，往返后可解锁=true | 466ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 密钥文件中不存在 DEK 明文 | 246 字节全部为密文与公开参数 | 0ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | AES-GCM 篡改检测 | 篡改一位即被检出 | 0ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 真实 SQLite：写入四类条目 + 一张图片并落盘 | 写入 4 条，图片 36 字节，连接已关闭 | 330ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 磁盘上的 db / journal / 附件文件里搜不到任何明文 | 扫描 20544 字节，6 个文本标记与图片字节全部 0 命中 | 2ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 重新打开后条目与图片完整恢复 | 4 条恢复（预期 4），问题项 0，图片还原=true | 257ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 真库与诱饵库混在同一张表里但互相看不见 | 诱饵库看到 1 条，真库看到 4 条，而表里实际混存 7 行（2 份清单 + 5 条笔记） | 491ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 自动锁定：超时后密钥清零且读取被拒 | 未超时保持解锁=true，超时后已锁定=true，锁定后读取被拒=true | 0ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST PASS | 篡改数据库中一条密文后，它被标记为不可读而非静默消失 | 不可读 1 条，其余 3 条正常（预期 3） | 221ms
+09-15 01:24:24.153  7533  7594 I MixiaSelfTest: SELFTEST SUMMARY 19/19 passed

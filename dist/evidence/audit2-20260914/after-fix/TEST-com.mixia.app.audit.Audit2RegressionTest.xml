@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.audit.Audit2RegressionTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-14T22:40:50.274Z" hostname="公司" time="2.549">
+  <properties/>
+  <testcase name="合法 blobId 的笔记编解码往返一致" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.013"/>
+  <testcase name="不可读条目在后续写入后仍保留在清单中" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.407"/>
+  <testcase name="清单编码接受合法 id 且往返一致" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.001"/>
+  <testcase name="清单编码拒绝形状非法的 id" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.001"/>
+  <testcase name="条目 id 冲突时拒绝覆盖已有条目" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.164"/>
+  <testcase name="笔记编码拒绝形状非法的 blobId" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.001"/>
+  <testcase name="图片明文超过上限被拒绝" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.166"/>
+  <testcase name="缺失条目在后续写入后仍保留在清单中" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.276"/>
+  <testcase name="恰好等于上限的图片仍可写入读回" classname="com.mixia.app.audit.Audit2RegressionTest" time="1.194"/>
+  <testcase name="密钥文件解码拒绝尾部多余字节" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.32"/>
+  <testcase name="笔记解码拒绝形状非法的 blobId" classname="com.mixia.app.audit.Audit2RegressionTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

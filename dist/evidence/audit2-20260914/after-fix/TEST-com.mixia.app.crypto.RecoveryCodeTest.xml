@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.crypto.RecoveryCodeTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-14T22:40:58.578Z" hostname="公司" time="0.017">
+  <properties/>
+  <testcase name="isValid 与 canonicalize 判断一致" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.002"/>
+  <testcase name="规范化后长度不变且可再次规范化" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="生成的恢复码为 48 字符且全部规范" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.003"/>
+  <testcase name="抄写错误 O 与 I 与 L 能被自动纠正" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.001"/>
+  <testcase name="归一化可容忍连字符 空格 换行与小写" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.001"/>
+  <testcase name="长度不符的输入被拒绝" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="不同恢复码之间不会碰撞" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.001"/>
+  <testcase name="展示格式为 12 组每组 4 字符" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="每次生成的恢复码都不同" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.008"/>
+  <testcase name="熵为 240 位" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.001"/>
+  <testcase name="含非法字符的输入被拒绝" classname="com.mixia.app.crypto.RecoveryCodeTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

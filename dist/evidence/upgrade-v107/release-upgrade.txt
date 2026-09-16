@@ -1,0 +1,13 @@
+v1.0.6 release 安装输出:
+Performing Streamed Install
+Success
+
+
+v1.0.7 release 覆盖安装输出:
+Performing Streamed Install
+Success
+
+
+升级前: {'versionCode': '7', 'versionName': '1.0.6', 'firstInstallTime': '2026-09-16 05:03:54', 'lastUpdateTime': '2026-09-16 05:03:54'}
+
+升级后: {'versionCode': '8', 'versionName': '1.0.7', 'firstInstallTime': '2026-09-16 05:03:54', 'lastUpdateTime': '2026-09-16 05:04:21'}

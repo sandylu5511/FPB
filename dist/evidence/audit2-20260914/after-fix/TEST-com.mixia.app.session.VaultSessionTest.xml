@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.session.VaultSessionTest" tests="19" skipped="0" failures="0" errors="0" timestamp="2026-09-14T22:41:12.438Z" hostname="公司" time="8.487">
+  <properties/>
+  <testcase name="删除条目会一并删掉它的图片密文" classname="com.mixia.app.session.VaultSessionTest" time="0.402"/>
+  <testcase name="锁定时任何读取或写入都抛出异常而不是返回空数据" classname="com.mixia.app.session.VaultSessionTest" time="0.289"/>
+  <testcase name="超时后自动锁定并清零密钥" classname="com.mixia.app.session.VaultSessionTest" time="0.369"/>
+  <testcase name="真库与诱饵库的图片互相取不到" classname="com.mixia.app.session.VaultSessionTest" time="0.488"/>
+  <testcase name="诱饵库清理孤儿不会误删真库的图片" classname="com.mixia.app.session.VaultSessionTest" time="0.491"/>
+  <testcase name="更新保留创建时间并刷新修改时间" classname="com.mixia.app.session.VaultSessionTest" time="0.424"/>
+  <testcase name="四类条目都能存取且重新打开后类型不变" classname="com.mixia.app.session.VaultSessionTest" time="0.548"/>
+  <testcase name="回到前台已超时则锁定" classname="com.mixia.app.session.VaultSessionTest" time="0.384"/>
+  <testcase name="清单损坏后重新写入不会覆盖原索引" classname="com.mixia.app.session.VaultSessionTest" time="0.5"/>
+  <testcase name="标签统计按出现次数排序" classname="com.mixia.app.session.VaultSessionTest" time="0.414"/>
+  <testcase name="密文被篡改一位后报为不可读而不是静默消失" classname="com.mixia.app.session.VaultSessionTest" time="0.49"/>
+  <testcase name="回到前台未超时则保持解锁" classname="com.mixia.app.session.VaultSessionTest" time="0.393"/>
+  <testcase name="创建后可检索且落盘内容搜不到任何明文片段" classname="com.mixia.app.session.VaultSessionTest" time="0.453"/>
+  <testcase name="清单随写入更新且重新打开后条目仍在" classname="com.mixia.app.session.VaultSessionTest" time="0.541"/>
+  <testcase name="清单损坏时拒绝解锁并保持锁定" classname="com.mixia.app.session.VaultSessionTest" time="0.469"/>
+  <testcase name="对不存在的条目更新或删除返回失败" classname="com.mixia.app.session.VaultSessionTest" time="0.405"/>
+  <testcase name="非法 blobId 被拒绝且不会拼出目录外的路径" classname="com.mixia.app.session.VaultSessionTest" time="0.406"/>
+  <testcase name="图片不以明文落盘且能完整取回" classname="com.mixia.app.session.VaultSessionTest" time="0.405"/>
+  <testcase name="真库与诱饵库共用一张表但互相看不见" classname="com.mixia.app.session.VaultSessionTest" time="0.612"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,255 @@
+<!-- 主工程（已修复）全量单测结果，合并自 13 个 XML -->
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.audit.Audit2RegressionTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:05:57.354Z" hostname="公司" time="2.17">
+  <properties/>
+  <testcase name="合法 blobId 的笔记编解码往返一致" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.01"/>
+  <testcase name="不可读条目在后续写入后仍保留在清单中" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.438"/>
+  <testcase name="清单编码接受合法 id 且往返一致" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.001"/>
+  <testcase name="清单编码拒绝形状非法的 id" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.001"/>
+  <testcase name="条目 id 冲突时拒绝覆盖已有条目" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.179"/>
+  <testcase name="笔记编码拒绝形状非法的 blobId" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.001"/>
+  <testcase name="图片明文超过上限被拒绝" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.177"/>
+  <testcase name="缺失条目在后续写入后仍保留在清单中" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.31"/>
+  <testcase name="恰好等于上限的图片仍可写入读回" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.913"/>
+  <testcase name="密钥文件解码拒绝尾部多余字节" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.132"/>
+  <testcase name="笔记解码拒绝形状非法的 blobId" classname="com.fpb.vault.audit.Audit2RegressionTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.audit.Audit3RegressionTest" tests="12" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:05:59.527Z" hostname="公司" time="0.032">
+  <properties/>
+  <testcase name="清单条目过大时拒绝_且不把整条读进内存" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.02"/>
+  <testcase name="多一个字节就放弃" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.0"/>
+  <testcase name="恰好等于上限时可以完整读出" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.001"/>
+  <testcase name="系统时间回拨或相同时不提醒" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.001"/>
+  <testcase name="清单略大但仍正常时照常可用" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.008"/>
+  <testcase name="空流返回空数组而不是 null" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.0"/>
+  <testcase name="正常备份包可以预检出条目数" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.0"/>
+  <testcase name="恰好七天算过期_差一毫秒不算" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.0"/>
+  <testcase name="超过上限时立刻放弃_不再把剩余字节读进内存" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.001"/>
+  <testcase name="上限为零拒绝非空输入_负数上限抛出异常" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.001"/>
+  <testcase name="有内容却从未导出过时必须立刻提醒" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.0"/>
+  <testcase name="空库即便从未导出过也不提醒" classname="com.fpb.vault.audit.Audit3RegressionTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.audit.AuditRegressionTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:05:59.562Z" hostname="公司" time="1.989">
+  <properties/>
+  <testcase name="清单编码拒绝超过上限的条目数" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.015"/>
+  <testcase name="锁定动作仍会发出锁定回调" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.163"/>
+  <testcase name="删除条目时清单落盘失败不得已经删掉图片" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.179"/>
+  <testcase name="恢复码末尾多打两个 0 应被拒绝" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.0"/>
+  <testcase name="真库 DEK 不得经由外部 KEK 写进诱饵槽" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.135"/>
+  <testcase name="合法恢复码及其带连字符形式依然被接受" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.001"/>
+  <testcase name="诱饵 DEK 不得经由外部 KEK 写进主密码槽" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.13"/>
+  <testcase name="写入失败回滚后仍能正常创建与读取条目" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.182"/>
+  <testcase name="真库 DEK 经由外部 KEK 写入生物识别槽仍然可用" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.132"/>
+  <testcase name="正常删除条目仍会清掉它的图片密文" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.183"/>
+  <testcase name="创建条目时清单落盘失败不得留下不可见的孤儿行" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.189"/>
+  <testcase name="重复解锁不应先发出一次锁定回调" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.222"/>
+  <testcase name="KDF 参数拒绝不合理的内存上限" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.001"/>
+  <testcase name="清单编码接受恰好等于上限的条目数" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.068"/>
+  <testcase name="孤儿清理会顺带回收崩溃残留的半截附件文件" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.188"/>
+  <testcase name="KDF 参数拒绝不合理的迭代次数" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.001"/>
+  <testcase name="三个预设档位都通过校验" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.002"/>
+  <testcase name="锁定时更新条目应抛出异常而不是静默返回 null" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.196"/>
+  <testcase name="超长标签截断后不应留下重复项" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.001"/>
+  <testcase name="恢复码末尾多打一个 0 不应被接受" classname="com.fpb.vault.audit.AuditRegressionTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.codec.NoteCodecTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:01.554Z" hostname="公司" time="0.005">
+  <properties/>
+  <testcase name="账号密码往返一致" classname="com.fpb.vault.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="收藏标记往返一致" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="未知版本号返回 null" classname="com.fpb.vault.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="空内容与空列表往返一致" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="尾部多余字节导致解码失败" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="图片笔记往返一致" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="随机字节不会让解码器抛异常" classname="com.fpb.vault.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="中文表情与换行往返一致" classname="com.fpb.vault.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="同一内容编码两次字节完全相同" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="超大长度声明不会分配内存而是直接拒绝" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="magic 被破坏后解码失败" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="非法类型码返回 null" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="文字笔记往返一致" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="解码器不接受清单格式的字节" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <testcase name="截断的字节返回 null" classname="com.fpb.vault.codec.NoteCodecTest" time="0.001"/>
+  <testcase name="待办清单往返一致" classname="com.fpb.vault.codec.NoteCodecTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.codec.NoteIndexCodecTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:01.562Z" hostname="公司" time="0.001">
+  <properties/>
+  <testcase name="id 列表往返一致" classname="com.fpb.vault.codec.NoteIndexCodecTest" time="0.001"/>
+  <testcase name="清单损坏时返回 null 而不是空列表" classname="com.fpb.vault.codec.NoteIndexCodecTest" time="0.0"/>
+  <testcase name="尾部多余字节导致失败" classname="com.fpb.vault.codec.NoteIndexCodecTest" time="0.0"/>
+  <testcase name="清单中出现非法 id 时返回 null" classname="com.fpb.vault.codec.NoteIndexCodecTest" time="0.0"/>
+  <testcase name="空清单往返一致" classname="com.fpb.vault.codec.NoteIndexCodecTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.crypto.AeadCipherTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:01.566Z" hostname="公司" time="0.013">
+  <properties/>
+  <testcase name="密文被截断无法解密" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="密文长度包含 16 字节认证标签" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="密文任意一位被改动都无法解密" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.003"/>
+  <testcase name="空明文与长明文都能正确处理" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.007"/>
+  <testcase name="非法密钥长度被拒绝" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.001"/>
+  <testcase name="nonce 被改动就无法解密" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="加密后可以解密还原" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="AAD 不匹配时解密失败" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.0"/>
+  <testcase name="换一把密钥无法解密" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.001"/>
+  <testcase name="相同明文两次加密产生不同密文与 nonce" classname="com.fpb.vault.crypto.AeadCipherTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.crypto.Argon2KdfTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:01.580Z" hostname="公司" time="0.575">
+  <properties/>
+  <testcase name="参数相等性按内容比较" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.0"/>
+  <testcase name="输出长度恒为 32 字节" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.143"/>
+  <testcase name="密码大小写与空白被视为不同" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.147"/>
+  <testcase name="相同密码与相同参数派生出相同密钥" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.096"/>
+  <testcase name="非法 KDF 参数被拒绝" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.002"/>
+  <testcase name="不同密码派生出不同密钥" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.089"/>
+  <testcase name="标准档参数符合设计值" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.0"/>
+  <testcase name="空密码被拒绝" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.0"/>
+  <testcase name="换个 salt 就派生出完全不同的密钥" classname="com.fpb.vault.crypto.Argon2KdfTest" time="0.097"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.crypto.Base32CrockfordTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:02.157Z" hostname="公司" time="0.003">
+  <properties/>
+  <testcase name="拒绝非规范编码_尾部填充位必须为零" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.001"/>
+  <testcase name="字母表不含易混字符" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="拒绝非法字符" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="O 归一化为 0 I 与 L 归一化为 1" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="分隔符与空白被忽略" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="编码后再解码可以还原原始字节" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.001"/>
+  <testcase name="期望长度不符时返回 null" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="空数组编码为空串" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="小写输入可被归一化" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.0"/>
+  <testcase name="30 字节恰好编码为 48 字符" classname="com.fpb.vault.crypto.Base32CrockfordTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.crypto.RecoveryCodeTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:02.161Z" hostname="公司" time="0.004">
+  <properties/>
+  <testcase name="isValid 与 canonicalize 判断一致" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.001"/>
+  <testcase name="规范化后长度不变且可再次规范化" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="生成的恢复码为 48 字符且全部规范" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.001"/>
+  <testcase name="抄写错误 O 与 I 与 L 能被自动纠正" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="归一化可容忍连字符 空格 换行与小写" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="长度不符的输入被拒绝" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.001"/>
+  <testcase name="不同恢复码之间不会碰撞" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="展示格式为 12 组每组 4 字符" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="每次生成的恢复码都不同" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.001"/>
+  <testcase name="熵为 240 位" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.0"/>
+  <testcase name="含非法字符的输入被拒绝" classname="com.fpb.vault.crypto.RecoveryCodeTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.crypto.VaultKeyFileTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:02.167Z" hostname="公司" time="1.443">
+  <properties/>
+  <testcase name="KDF 参数被原样保留" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.09"/>
+  <testcase name="主密码槽密文被篡改后密码解锁失败但恢复码仍可用" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.173"/>
+  <testcase name="编码结果是确定的_同样输入两次编码长度一致" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.136"/>
+  <testcase name="尾部被追加垃圾字节应被拒绝" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.096"/>
+  <testcase name="编码后解码可以正常解锁" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.237"/>
+  <testcase name="版本号不支持时被拒绝" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.09"/>
+  <testcase name="启用与未启用假密码时密钥文件长度一致" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.221"/>
+  <testcase name="magic 不匹配的文件被拒绝" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.08"/>
+  <testcase name="密钥文件中不含任何明文密钥" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.135"/>
+  <testcase name="被截断的文件被拒绝" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.085"/>
+  <testcase name="缺少主密码槽的文件被拒绝" classname="com.fpb.vault.crypto.VaultKeyFileTest" time="0.098"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.crypto.VaultKeyringTest" tests="23" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:03.612Z" hostname="公司" time="5.714">
+  <properties/>
+  <testcase name="关闭假密码后旧假密码解不开、但文件结构不变" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.426"/>
+  <testcase name="启用与未启用假密码的密钥文件结构完全一致" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.225"/>
+  <testcase name="换恢复码后旧恢复码失效新恢复码可用" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.226"/>
+  <testcase name="重设假密码只动诱饵槽，真库槽位字节不变" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.306"/>
+  <testcase name="恢复码解出与主密码相同的 DEK" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.183"/>
+  <testcase name="假密码进入诱饵库且 DEK 与真库不同" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.215"/>
+  <testcase name="用假密码解锁后无法解开真库内容" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.231"/>
+  <testcase name="拒绝把诱饵库 DEK 写进主密码槽" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.134"/>
+  <testcase name="改主密码后旧密码失效新密码可用且 DEK 不变" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.221"/>
+  <testcase name="外部 KEK 可以包裹并解出 DEK" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.085"/>
+  <testcase name="改主密码后假密码不受影响" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.229"/>
+  <testcase name="主密码槽不可移除" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.099"/>
+  <testcase name="主密码解锁得到真库 DEK" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.185"/>
+  <testcase name="恢复码不能解锁诱饵库" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.197"/>
+  <testcase name="错误密码被拒绝" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.189"/>
+  <testcase name="真密码 假密码 错误密码的解锁耗时处于同一量级" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.658"/>
+  <testcase name="恢复码容错输入仍能解锁" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.284"/>
+  <testcase name="改主密码后恢复码依然可用" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.182"/>
+  <testcase name="错误的恢复码返回 null" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.138"/>
+  <testcase name="假密码不能与主密码相同" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.001"/>
+  <testcase name="标准档参数下完整流程可用" classname="com.fpb.vault.crypto.VaultKeyringTest" time="1.115"/>
+  <testcase name="过短的主密码被拒绝" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.0"/>
+  <testcase name="未启用假密码时诱饵槽依然存在但无法打开" classname="com.fpb.vault.crypto.VaultKeyringTest" time="0.179"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.session.VaultSessionTest" tests="19" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:09.329Z" hostname="公司" time="3.849">
+  <properties/>
+  <testcase name="删除条目会一并删掉它的图片密文" classname="com.fpb.vault.session.VaultSessionTest" time="0.188"/>
+  <testcase name="锁定时任何读取或写入都抛出异常而不是返回空数据" classname="com.fpb.vault.session.VaultSessionTest" time="0.142"/>
+  <testcase name="超时后自动锁定并清零密钥" classname="com.fpb.vault.session.VaultSessionTest" time="0.181"/>
+  <testcase name="真库与诱饵库的图片互相取不到" classname="com.fpb.vault.session.VaultSessionTest" time="0.23"/>
+  <testcase name="诱饵库清理孤儿不会误删真库的图片" classname="com.fpb.vault.session.VaultSessionTest" time="0.231"/>
+  <testcase name="更新保留创建时间并刷新修改时间" classname="com.fpb.vault.session.VaultSessionTest" time="0.181"/>
+  <testcase name="四类条目都能存取且重新打开后类型不变" classname="com.fpb.vault.session.VaultSessionTest" time="0.228"/>
+  <testcase name="回到前台已超时则锁定" classname="com.fpb.vault.session.VaultSessionTest" time="0.181"/>
+  <testcase name="清单损坏后重新写入不会覆盖原索引" classname="com.fpb.vault.session.VaultSessionTest" time="0.224"/>
+  <testcase name="标签统计按出现次数排序" classname="com.fpb.vault.session.VaultSessionTest" time="0.186"/>
+  <testcase name="密文被篡改一位后报为不可读而不是静默消失" classname="com.fpb.vault.session.VaultSessionTest" time="0.222"/>
+  <testcase name="回到前台未超时则保持解锁" classname="com.fpb.vault.session.VaultSessionTest" time="0.187"/>
+  <testcase name="创建后可检索且落盘内容搜不到任何明文片段" classname="com.fpb.vault.session.VaultSessionTest" time="0.176"/>
+  <testcase name="清单随写入更新且重新打开后条目仍在" classname="com.fpb.vault.session.VaultSessionTest" time="0.228"/>
+  <testcase name="清单损坏时拒绝解锁并保持锁定" classname="com.fpb.vault.session.VaultSessionTest" time="0.227"/>
+  <testcase name="对不存在的条目更新或删除返回失败" classname="com.fpb.vault.session.VaultSessionTest" time="0.184"/>
+  <testcase name="非法 blobId 被拒绝且不会拼出目录外的路径" classname="com.fpb.vault.session.VaultSessionTest" time="0.174"/>
+  <testcase name="图片不以明文落盘且能完整取回" classname="com.fpb.vault.session.VaultSessionTest" time="0.186"/>
+  <testcase name="真库与诱饵库共用一张表但互相看不见" classname="com.fpb.vault.session.VaultSessionTest" time="0.291"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.fpb.vault.vault.ThemeModeTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-16T04:06:13.180Z" hostname="公司" time="0.001">
+  <properties/>
+  <testcase name="每个常量都能在选项表里找到，且标签非空" classname="com.fpb.vault.vault.ThemeModeTest" time="0.001"/>
+  <testcase name="labelOf 对未知取值给一个能读的兜底" classname="com.fpb.vault.vault.ThemeModeTest" time="0.0"/>
+  <testcase name="空值与脏数据一律收敛到跟随系统" classname="com.fpb.vault.vault.ThemeModeTest" time="0.0"/>
+  <testcase name="存进去再读出来不变形（模拟设置页选一次的动作）" classname="com.fpb.vault.vault.ThemeModeTest" time="0.0"/>
+  <testcase name="选项表里的每个值都是稳定字面量，不会被误判成脏数据" classname="com.fpb.vault.vault.ThemeModeTest" time="0.0"/>
+  <testcase name="三个合法取值原样通过" classname="com.fpb.vault.vault.ThemeModeTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+

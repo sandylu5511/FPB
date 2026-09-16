@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mixia.app.audit.AuditRegressionTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-09-14T22:40:52.832Z" hostname="公司" time="4.485">
+  <properties/>
+  <testcase name="清单编码拒绝超过上限的条目数" classname="com.mixia.app.audit.AuditRegressionTest" time="0.038"/>
+  <testcase name="锁定动作仍会发出锁定回调" classname="com.mixia.app.audit.AuditRegressionTest" time="0.372"/>
+  <testcase name="删除条目时清单落盘失败不得已经删掉图片" classname="com.mixia.app.audit.AuditRegressionTest" time="0.414"/>
+  <testcase name="恢复码末尾多打两个 0 应被拒绝" classname="com.mixia.app.audit.AuditRegressionTest" time="0.001"/>
+  <testcase name="真库 DEK 不得经由外部 KEK 写进诱饵槽" classname="com.mixia.app.audit.AuditRegressionTest" time="0.274"/>
+  <testcase name="合法恢复码及其带连字符形式依然被接受" classname="com.mixia.app.audit.AuditRegressionTest" time="0.003"/>
+  <testcase name="诱饵 DEK 不得经由外部 KEK 写进主密码槽" classname="com.mixia.app.audit.AuditRegressionTest" time="0.32"/>
+  <testcase name="写入失败回滚后仍能正常创建与读取条目" classname="com.mixia.app.audit.AuditRegressionTest" time="0.408"/>
+  <testcase name="真库 DEK 经由外部 KEK 写入生物识别槽仍然可用" classname="com.mixia.app.audit.AuditRegressionTest" time="0.328"/>
+  <testcase name="正常删除条目仍会清掉它的图片密文" classname="com.mixia.app.audit.AuditRegressionTest" time="0.388"/>
+  <testcase name="创建条目时清单落盘失败不得留下不可见的孤儿行" classname="com.mixia.app.audit.AuditRegressionTest" time="0.406"/>
+  <testcase name="重复解锁不应先发出一次锁定回调" classname="com.mixia.app.audit.AuditRegressionTest" time="0.496"/>
+  <testcase name="KDF 参数拒绝不合理的内存上限" classname="com.mixia.app.audit.AuditRegressionTest" time="0.002"/>
+  <testcase name="清单编码接受恰好等于上限的条目数" classname="com.mixia.app.audit.AuditRegressionTest" time="0.188"/>
+  <testcase name="孤儿清理会顺带回收崩溃残留的半截附件文件" classname="com.mixia.app.audit.AuditRegressionTest" time="0.42"/>
+  <testcase name="KDF 参数拒绝不合理的迭代次数" classname="com.mixia.app.audit.AuditRegressionTest" time="0.001"/>
+  <testcase name="三个预设档位都通过校验" classname="com.mixia.app.audit.AuditRegressionTest" time="0.005"/>
+  <testcase name="锁定时更新条目应抛出异常而不是静默返回 null" classname="com.mixia.app.audit.AuditRegressionTest" time="0.413"/>
+  <testcase name="超长标签截断后不应留下重复项" classname="com.mixia.app.audit.AuditRegressionTest" time="0.003"/>
+  <testcase name="恢复码末尾多打一个 0 不应被接受" classname="com.mixia.app.audit.AuditRegressionTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

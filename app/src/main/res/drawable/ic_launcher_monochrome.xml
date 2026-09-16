@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 13+ 主题图标的单色层：与前景完全相同的 FPB 字标几何，
+  但用纯白（系统会用主题色替换它，只保留 alpha）。渐变在单色层里没有意义。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1200"
+    android:viewportHeight="1200">
+
+    <group
+        android:scaleX="0.7215"
+        android:scaleY="0.7215"
+        android:translateX="153.28"
+        android:translateY="450.65">
+
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M80 83h310v72H170v28h180v69H170v65H80Z" />
+
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M445 83h184c91 0 141 41 141 111 0 72-50 112-141 112h-94v11h-90Zm90 71v82h88c39 0 58-13 58-42 0-27-19-40-58-40Z" />
+
+        <group android:translateX="41">
+            <path
+                android:fillColor="#FFFFFFFF"
+                android:strokeColor="#FFFFFFFF"
+                android:strokeWidth="12"
+                android:strokeLineJoin="round"
+                android:pathData="M790.1 325H970.5C1016.7 325 1047.5 320.04 1071.7 308.57C1095.9 297.1 1111.3 278.19 1111.3 259.9C1111.3 237.58 1090.4 219.91 1044.75 205.03C1084.35 190.77 1099.75 177.75 1099.75 158.53C1099.75 142.72 1086 126.6 1063.45 115.44C1039.8 103.97 1011.75 99.01 968.85 99.01H790.1ZM872.6 137.76H962.25C1000.75 137.76 1020.55 146.44 1020.55 163.18C1020.55 180.23 1000.75 188.91 962.25 188.91H872.6ZM872.6 227.66H971.05C1011.2 227.66 1032.1 237.58 1032.1 257.11C1032.1 276.33 1011.2 286.25 971.05 286.25H872.6Z" />
+        </group>
+    </group>
+</vector>

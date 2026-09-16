@@ -1,0 +1,71 @@
+########## 准备：卸载后装回 v1.0.6（versionCode 7）调试包（2026-09-16 12:56:21）##########
+Success
+Performing Streamed Install
+Success
+
+########## 第 1 阶段：在 v1.0.6 上造数据 ##########
+[12:56:23] 当前安装：1.0.6（versionCode 7）
+  [PASS] 造数据的基线必须是 v1.0.6（versionCode 7）
+[12:56:23] pm clear → 冷启动 → 走完引导
+    [截图] 01-seed-01-主页空列表.png  86640 B
+[12:57:30] 新建一条文字记录：UPGRADE_MARK_070
+[12:58:05] 导入照片
+[12:58:12] 打开选图器，最多选 2 张（导入前库里有 0 张）
+[12:58:30]     页头：原图加密存储 · 2 张（导入前 0 张）
+    [截图] 02-seed-02-已导入照片.png  57000 B
+[12:58:31]     照片库现有 2 张
+[12:58:37]     应用停在内页，点顶栏返回退回主页（第 1 次）
+  [PASS] 升级前主页记录数已确定
+    [截图] 03-seed-03-主页有内容.png  95779 B
+[12:58:44] 模拟「刚导出过备份」：把 backup_reminder_at 写成当前时间
+  [PASS] 数据库已结清回滚日志（否则 md5 比对会得出错误结论）
+[12:58:48] 基线已存 D:/MixiaVault/dist/evidence/upgrade-v107/baseline.json
+    1a33570671eb684a42a2ade93ce88d3c  databases/vault.db
+    d41d8cd98f00b204e9800998ecf8427e  databases/vault.db-journal
+    17001c35f7774b07dfb3b34895ea0576  files/attachments/1a7892322192bc717c35447753e7b172
+    8ba1309435f64c0947bcda16efdd18c2  files/attachments/561c9565e0a0a1fec2c1bcd43e475494
+    9c180869e08e62d911210940e02d779c  files/fpb.key
+    7f6bbcbee9848eb0e80fcaaa7213a9b2  files/profileInstalled
+    2f6ca110bd40e4ca4c3594833caa8309  shared_prefs/fpb_settings.xml
+
+文件数 7；下一步执行：
+    D:/AndroidSdk/platform-tools/adb.exe install -r D:\MixiaVault\app\build\outputs\apk\debug\app-debug.apk
+    然后 python tools/upgrade-v107.py verify
+
+########## 覆盖安装 v1.0.7（versionCode 8）调试包 ##########
+Performing Streamed Install
+Success
+
+########## 第 2 阶段：升级后核对（2026-09-16 12:58:49）##########
+[12:58:49] 当前安装：1.0.7（versionCode 8）
+  [PASS] 已是 v1.0.7（versionCode 8）
+  [PASS] firstInstallTime 未变 → 这是升级而不是重装
+  [PASS] lastUpdateTime 已更新到这次安装
+[12:58:49] 逐字节比对私有目录（文件级证据）
+  [PASS] 升级前的文件一个都没少
+  [PASS] 升级前的文件内容一字未改
+    OK 1a33570671eb684a42a2ade93ce88d3c  databases/vault.db
+    OK d41d8cd98f00b204e9800998ecf8427e  databases/vault.db-journal
+    OK 17001c35f7774b07dfb3b34895ea0576  files/attachments/1a7892322192bc717c35447753e7b172
+    OK 8ba1309435f64c0947bcda16efdd18c2  files/attachments/561c9565e0a0a1fec2c1bcd43e475494
+    OK 9c180869e08e62d911210940e02d779c  files/fpb.key
+    OK 7f6bbcbee9848eb0e80fcaaa7213a9b2  files/profileInstalled
+    OK 2f6ca110bd40e4ca4c3594833caa8309  shared_prefs/fpb_settings.xml
+  [PASS] backup_reminder_at 的值在升级后仍然是升级前那个
+[12:59:01]     应用停在解锁页，用主密码解锁
+    [截图] 01-verify-01-升级后主页.png  95687 B
+  [PASS] 升级后主页仍是 2 条记录
+  [PASS] 升级前写的那条记录标题还在
+  [PASS] 升级后没有冒出假的「还没有导出过备份」催促条
+[12:59:20] 进照片库核对图片还解得开
+    [截图] 02-verify-02-升级后照片库.png  51324 B
+  [PASS] 升级后照片库仍是 2 张（且能被解密显示）
+[12:59:33]     应用停在内页，点顶栏返回退回主页（第 1 次）
+[12:59:38] 把时间戳改到 8 天前，验证周期性提醒真的会响
+[12:59:51]     应用停在解锁页，用主密码解锁
+    [截图] 03-verify-03-过期催促条.png  117587 B
+  [PASS] 超过 7 天后出现「已经超过 7 天」催促条
+  [PASS] 催促条出现时不再同时提示从未导出
+[13:00:09] 已把时间戳还原
+
+结果：0 项失败
