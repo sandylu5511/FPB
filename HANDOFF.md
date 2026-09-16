@@ -1,4 +1,4 @@
-# HANDOFF —— 密匣 MixiaVault（仓库 `sandylu5511/FPB`）
+# HANDOFF —— MixiaVault（仓库 `sandylu5511/FPB`）
 
 > 交接基线：**v1.0.8（versionCode 9）**，2026-09-16
 > 本文件记录"接手的人需要知道什么"。逐版发布细节见 `dist/FPB-v1.0.8-发布说明.md`。
