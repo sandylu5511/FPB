@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NoteAlt
 import androidx.compose.material.icons.outlined.Password
+import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
@@ -139,11 +140,14 @@ fun HomeScreen(state: VaultAppState) {
                     title = "FPB",
                     subtitle = "本机加密 · ${state.notes.size} 条",
                     actions = {
-                        // 诱饵库（假密码进入）不提供照片库入口：诱饵库要看起来像
-                        // 一个正常的空应用，一个空的"照片库"反而是此地无银的暗示。
+                        // 诱饵库（假密码进入）不提供媒体库入口：诱饵库要看起来像
+                        // 一个正常的空应用，一个空的"媒体库"反而是此地无银的暗示。
                         if (!state.isDecoy) {
                             IconButton(onClick = { state.push(Route.Photos) }) {
-                                Icon(Icons.Outlined.PhotoLibrary, contentDescription = "照片库")
+                                Icon(
+                                    Icons.Outlined.PhotoLibrary,
+                                    contentDescription = "照片与视频",
+                                )
                             }
                         }
                         IconButton(onClick = { searching = !searching }) {
@@ -583,6 +587,7 @@ private fun TypeBadge(type: NoteType) {
     val (icon, tint) = when (type) {
         NoteType.TEXT -> Icons.Outlined.NoteAlt to MaterialTheme.colorScheme.primary
         NoteType.IMAGE -> Icons.Outlined.Image to MaterialTheme.colorScheme.secondary
+        NoteType.VIDEO -> Icons.Outlined.Videocam to MaterialTheme.colorScheme.secondary
         NoteType.CHECKLIST -> Icons.Outlined.Checklist to MaterialTheme.colorScheme.tertiary
         NoteType.CREDENTIAL -> Icons.Outlined.Password to MaterialTheme.colorScheme.error
     }
@@ -650,6 +655,7 @@ private fun CreateTypeDialog(
 fun NoteType.label(): String = when (this) {
     NoteType.TEXT -> "文字"
     NoteType.IMAGE -> "图片"
+    NoteType.VIDEO -> "视频"
     NoteType.CHECKLIST -> "待办"
     NoteType.CREDENTIAL -> "账号密码"
 }
@@ -657,6 +663,7 @@ fun NoteType.label(): String = when (this) {
 private fun NoteType.iconAndHint(): Pair<ImageVector, String> = when (this) {
     NoteType.TEXT -> Icons.Outlined.NoteAlt to "纯文本，适合记想法、地址、证件号"
     NoteType.IMAGE -> Icons.Outlined.Image to "原图直接加密存储，不压缩"
+    NoteType.VIDEO -> Icons.Outlined.Videocam to "原片加密存储，不压缩、可播放"
     NoteType.CHECKLIST -> Icons.Outlined.Checklist to "清单，可勾选"
     NoteType.CREDENTIAL -> Icons.Outlined.Password to "账号、密码等结构化字段"
 }
@@ -664,14 +671,17 @@ private fun NoteType.iconAndHint(): Pair<ImageVector, String> = when (this) {
 /**
  * 标题为空时用摘要首行顶上，避免卡片看起来是空白。
  *
- * 图片记录是唯一的例外：它显示的是**按创建时间派生**的 `照片 · 9月15日 20:44`，
- * 而不是落盘的字。图库导入时不再往记录里写这个标题，于是"标题为空"永远等于
- * "用户没自己起过名字" —— 那条记录才敢在照片被删光时一起删掉（见 [PhotoRecord]）。
- * 派生出来的样子与旧版本写进记录里的那串完全一致，老用户看不出任何差别。
+ * 媒体记录是例外：它们显示的是**按创建时间派生**的 `照片 · 9月15日 20:44` /
+ * `视频 · 9月15日 20:44`，而不是落盘的字。图库导入时不再往记录里写这个标题，
+ * 于是"标题为空"永远等于"用户没自己起过名字" —— 那条记录才敢在媒体被删光时
+ * 一起删掉（见 [PhotoRecord]）。派生出来的样子与旧版本写进记录里的那串完全一致，
+ * 老用户看不出任何差别。
  */
 fun VaultNote.displayTitle(): String = when {
     title.isNotBlank() -> title
     type == NoteType.IMAGE && payload.createdAt > 0L -> PhotoRecord.autoTitle(payload.createdAt)
+    type == NoteType.VIDEO && payload.createdAt > 0L ->
+        PhotoRecord.autoTitle(payload.createdAt, word = PhotoRecord.VIDEO_TITLE_WORD)
     else -> payload.summary(limit = 24).ifBlank { type.label() + "记录" }
 }
 

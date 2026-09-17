@@ -65,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -80,24 +81,34 @@ import com.fpb.vault.model.NotePayload
 import com.fpb.vault.model.NoteType
 import com.fpb.vault.model.SecretField
 import com.fpb.vault.model.TodoItem
+import com.fpb.vault.model.VideoRef
 import com.fpb.vault.ui.components.FpbTopBar
 import com.fpb.vault.ui.components.SectionHeader
 import com.fpb.vault.ui.components.SuccessGreen
+import com.fpb.vault.ui.components.VideoPlayGlyph
 import com.fpb.vault.vault.ImagePipeline
 import kotlinx.coroutines.launch
 
 /**
- * 四类条目共用的编辑器。
+ * 五类条目共用的编辑器。
  *
  * 差异只在中间的正文区（见 [bodyFor]），上半段（标题、标签、收藏）与
- * 下半段（保存、删除、未保存提示）完全一致 —— 否则四个页面会各自演化，
+ * 下半段（保存、删除、未保存提示）完全一致 —— 否则几个页面会各自演化，
  * 最后出现"只有待办能收藏""密码条目忘了做脏数据提示"这类不一致。
  *
- * ## 图片为什么等到保存时才入库
+ * ## 图片为什么等到保存时才入库，视频却必须选完立刻入库
  *
- * 用户选了图之后先只放内存（[pending]），按下保存才真正加密落盘。
+ * 图片选了之后先只放内存（[pending]），按下保存才真正加密落盘。
  * 反过来写（选一张就立刻 putImage）会在用户放弃编辑时留下孤儿密文 ——
- * 存储占用一直涨，而界面上什么都看不到。真正剩下的孤儿由设置页的手动清理兜底。
+ * 存储占用一直涨，而界面上什么都看不到。
+ *
+ * **视频没有这个选择**：单条上限 2 GiB。"先拿在手里、点保存时才写"意味着这 2 GiB
+ * 要么整份留在内存里（必然 OOM），要么先在磁盘上落一份明文（直接违背"明文绝不落盘"）。
+ * 所以视频是**选完立刻流式入库**，这是被规模逼出来的，不是偷懒。
+ *
+ * 代价是"用户随后放弃编辑（或把刚选的那段又移掉）"会留下孤儿密文，
+ * 所以本地会记下[本次导入过的视频][importedVideoIds]，在保存与放弃两条路上各自回收一次；
+ * 更极端的残留（进程被杀）由设置页的手动清理兜底。
  */
 @Composable
 fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
@@ -115,7 +126,18 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
     var todos by remember { mutableStateOf(existing?.payload?.todos.orEmpty()) }
     var fields by remember { mutableStateOf(existing?.payload?.fields.orEmpty()) }
     var existingImages by remember { mutableStateOf(existing?.payload?.images.orEmpty()) }
+    var existingVideos by remember { mutableStateOf(existing?.payload?.videos.orEmpty()) }
     var pending by remember { mutableStateOf<List<ImagePipeline.Prepared>>(emptyList()) }
+
+    /**
+     * 这次编辑里已经落盘的视频 blobId。
+     *
+     * 单独记一份，是因为它们**不在** `existing.payload.videos` 里，
+     * 于是"保存时清理被移除的附件"那条逻辑扫不到它们：
+     * 用户选了一段 800 MB 的视频、看了看又移掉、然后保存 —— 密文会永远留在库里。
+     */
+    var importedVideoIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
     var busy by remember { mutableStateOf(false) }
     var touched by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
@@ -145,6 +167,27 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
         }
     }
 
+    val pickVideo = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        scope.launch {
+            // 选完立刻流式入库（原因见类注释）。界面上表现为"选完之后这一步会转一会儿"，
+            // 这是大文件必然的代价，所以按钮上要显示进度而不是让它看起来点不动。
+            val outcome = state.importVideo { context.contentResolver.openInputStream(uri) }
+            busy = false
+            when (outcome) {
+                is VideoImport.Ready -> {
+                    existingVideos = existingVideos + outcome.video
+                    importedVideoIds = importedVideoIds + outcome.video.blobId
+                    touched = true
+                }
+                is VideoImport.Rejected -> state.setMessage(outcome.message)
+            }
+        }
+    }
+
     fun saveAndExit() {
         if (busy) return
         busy = true
@@ -166,6 +209,7 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
                 tags = tags,
                 favorite = favorite,
                 images = refs.take(NotePayload.MAX_IMAGES),
+                videos = existingVideos.take(NotePayload.MAX_VIDEOS),
                 todos = todos,
                 fields = fields,
                 createdAt = existing?.payload?.createdAt ?: 0L,
@@ -179,13 +223,29 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
             }
 
             if (saved != null) {
-                // 编辑过程中被移除的图片要在更新成功之后再删：
-                // 反过来的话，更新失败就等于"照片没了、条目还在"。
+                // 编辑过程中被移除的附件要在更新成功之后再删：
+                // 反过来的话，更新失败就等于"文件没了、条目还在"。
                 val kept = refs.map { it.blobId }.toSet()
                 existing?.payload?.images
                     ?.map { it.blobId }
                     ?.filterNot { it in kept }
                     ?.forEach { stale -> state.session.deleteImage(stale) }
+
+                // 视频多一条来源：本次编辑里刚导入、又被移掉的那些。
+                // 它们不在 existing 里，所以上面那条清理扫不到（见 [importedVideoIds]）。
+                //
+                // 留存集合取的是**真正写进 payload 的那一份**（`take(MAX_VIDEOS)`），
+                // 而不是 `existingVideos` 全体。差别在"一次选了 25 段视频"这种情形上：
+                // 选图器一次最多 30 项，而单条记录只留 20 段，于是超出上限的那 5 段
+                // 既没进记录、也不会被这条清理扫到 —— 它们会一直是孤儿，
+                // 要等下一次解锁时的孤儿清扫才被收走。这里顺手就收干净。
+                val keptVideos = existingVideos.take(NotePayload.MAX_VIDEOS)
+                    .map { it.blobId }
+                    .toSet()
+                (existing?.payload?.videos?.map { it.blobId }.orEmpty() + importedVideoIds)
+                    .filterNot { it in keptVideos }
+                    .forEach { stale -> state.session.deleteImage(stale) }
+
                 busy = false
                 state.pop()
             } else {
@@ -273,6 +333,16 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
                 onOpenImage = { blobId, all ->
                     state.push(Route.Viewer(all, all.indexOf(blobId).coerceAtLeast(0)))
                 },
+                videos = existingVideos,
+                onPickVideo = {
+                    pickVideo.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                    )
+                },
+                onRemoveVideo = { ref ->
+                    existingVideos = existingVideos - ref
+                    touched = true
+                },
             )
 
             SectionHeader("标签")
@@ -317,7 +387,20 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
             title = { Text("放弃这次修改？") },
             text = { Text("离开后本次输入的内容不会保存。") },
             confirmButton = {
-                TextButton(onClick = { confirmDiscard = false; state.pop() }) {
+                TextButton(
+                    onClick = {
+                        confirmDiscard = false
+                        // 本次导入的视频已经在库里了（见类注释），放弃编辑之后
+                        // 没有任何记录指向它们，**必须在这里回收** —— 否则用户
+                        // "选了一段 800 MB 的视频，看了看又退出"就会永久占着这份空间，
+                        // 而界面上什么都看不到。
+                        // 图片不需要这一步：它们在保存之前根本没落盘。
+                        importedVideoIds.forEach { stale ->
+                            runCatching { state.session.deleteImage(stale) }
+                        }
+                        state.pop()
+                    },
+                ) {
                     Text("放弃", color = MaterialTheme.colorScheme.error)
                 }
             },
@@ -332,11 +415,19 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
             onDismissRequest = { confirmDelete = false },
             title = { Text("删除这条记录？") },
             text = {
+                val hasImages = existing?.payload?.images?.isNotEmpty() == true
+                val hasVideos = existing?.payload?.videos?.isNotEmpty() == true
+                val attachments = when {
+                    hasImages && hasVideos -> "照片与视频"
+                    hasVideos -> "视频"
+                    hasImages -> "图片"
+                    else -> ""
+                }
                 Text(
-                    if (existing?.payload?.images?.isNotEmpty() == true) {
-                        "删除后它的图片也会一并销毁，无法恢复。"
-                    } else {
+                    if (attachments.isEmpty()) {
                         "删除后无法恢复。建议定期导出备份。"
+                    } else {
+                        "删除后它的${attachments}也会一并销毁，无法恢复。"
                     },
                 )
             },
@@ -378,6 +469,9 @@ private fun bodyFor(
     onRemoveExistingImage: (ImageRef) -> Unit,
     onRemovePendingImage: (ImagePipeline.Prepared) -> Unit,
     onOpenImage: (String, List<String>) -> Unit,
+    videos: List<VideoRef>,
+    onPickVideo: () -> Unit,
+    onRemoveVideo: (VideoRef) -> Unit,
 ) {
     when (type) {
         NoteType.TEXT -> OutlinedTextField(
@@ -388,16 +482,32 @@ private fun bodyFor(
             modifier = Modifier.fillMaxWidth(),
         )
 
-        NoteType.IMAGE -> {
-            ImageStrip(
-                state = state,
-                existing = existingImages,
-                pending = pending,
-                onPick = onPickImage,
-                onRemoveExisting = onRemoveExistingImage,
-                onRemovePending = onRemovePendingImage,
-                onOpen = onOpenImage,
-            )
+        NoteType.IMAGE, NoteType.VIDEO -> {
+            // 图片功能区与视频功能区**按类型只显示一个**：VIDEO 记录也能装图
+            // （旧数据的 IMAGE 记录也可能带视频），但让两栏同时出现只会让人以为
+            // "这条记录什么都能装"，而实际上网格、列表摘要、空壳判定都是按主类型走的。
+            if (type == NoteType.IMAGE) {
+                ImageStrip(
+                    state = state,
+                    existing = existingImages,
+                    pending = pending,
+                    onPick = onPickImage,
+                    onRemoveExisting = onRemoveExistingImage,
+                    onRemovePending = onRemovePendingImage,
+                    onOpen = onOpenImage,
+                )
+            } else {
+                VideoStrip(
+                    state = state,
+                    videos = videos,
+                    onPick = onPickVideo,
+                    onRemove = onRemoveVideo,
+                    onOpen = { ref ->
+                        val all = videos.map { it.blobId }
+                        state.push(Route.Viewer(all, all.indexOf(ref.blobId).coerceAtLeast(0)))
+                    },
+                )
+            }
             OutlinedTextField(
                 value = body,
                 onValueChange = onBodyChange,
@@ -410,6 +520,105 @@ private fun bodyFor(
         NoteType.CHECKLIST -> ChecklistEditor(todos = todos, onChange = onTodosChange)
 
         NoteType.CREDENTIAL -> CredentialEditor(fields = fields, onChange = onFieldsChange)
+    }
+}
+
+/**
+ * 视频功能区：已有的视频（可播放、可移除）＋ 一个添加入口。
+ *
+ * 与 [ImageStrip] 的差别不只是"多了个时长"：这里**没有 pending 区**。
+ * 图片选完先在内存里等着保存，视频选完就立刻落盘了（原因见 [NoteEditorScreen] 的类注释），
+ * 所以列表里出现的每一条都已经是库里的东西。
+ */
+@Composable
+private fun VideoStrip(
+    state: VaultAppState,
+    videos: List<VideoRef>,
+    onPick: () -> Unit,
+    onRemove: (VideoRef) -> Unit,
+    onOpen: (VideoRef) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        videos.forEach { ref ->
+            VideoRow(
+                state = state,
+                video = ref,
+                onOpen = { onOpen(ref) },
+                onRemove = { onRemove(ref) },
+            )
+        }
+        OutlinedButton(onClick = onPick, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(if (videos.isEmpty()) "添加视频" else "再添加一个")
+        }
+        if (videos.size >= NotePayload.MAX_VIDEOS) {
+            Text(
+                text = "一条记录最多 ${NotePayload.MAX_VIDEOS} 段视频",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** 一行视频：左边封面、中间时长、右边移除。整行可点进全屏播放。 */
+@Composable
+private fun VideoRow(
+    state: VaultAppState,
+    video: VideoRef,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    var cover by remember(video.blobId) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(video.blobId) {
+        cover = state.videoThumbnail(video.blobId, video.durationMs)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onOpen)
+            .padding(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 64.dp, height = 48.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
+            val current = cover
+            if (current != null) {
+                Image(
+                    bitmap = current.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            VideoPlayGlyph(modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = if (video.durationMs > 0) {
+                "时长 ${NotePayload.formatDuration(video.durationMs)}"
+            } else {
+                "视频"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onRemove) {
+            Icon(
+                imageVector = Icons.Outlined.Close,
+                contentDescription = "移除这段视频",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

@@ -3,19 +3,26 @@ package com.fpb.vault.session
 import com.fpb.vault.crypto.KdfParams
 import com.fpb.vault.crypto.VaultKeyring
 import com.fpb.vault.crypto.unlockedOrFail
+import com.fpb.vault.data.BlobReader
+import com.fpb.vault.data.ChunkedBlobFormat
 import com.fpb.vault.model.ImageRef
 import com.fpb.vault.model.NotePayload
 import com.fpb.vault.model.NoteType
 import com.fpb.vault.model.SecretField
 import com.fpb.vault.model.TodoItem
+import com.fpb.vault.model.VideoRef
 import com.fpb.vault.testing.InMemoryBlobSink
 import com.fpb.vault.testing.InMemoryRowStore
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.IOException
 
 private const val MASTER = "correct horse battery"
 private const val DECOY = "another long passphrase"
@@ -75,6 +82,34 @@ private fun imageNote(blobId: String, title: String = "照片") = NotePayload(
 
 private fun bytesOf(seed: Int, size: Int = 64): ByteArray =
     ByteArray(size) { ((it * 7 + seed * 31) and 0xFF).toByte() }
+
+/**
+ * 一段"视频"的字节。
+ *
+ * 长度刻意跨过多个块（默认块大小 1 MiB），否则随机访问、跨块边界、
+ * "只解第 0 块"这些行为一条都验不到 —— 单块的输入会让它们全部退化成"整段读一遍"。
+ */
+private fun videoBytes(seed: Int = 11): ByteArray = bytesOf(seed, size = 2 * (1 shl 20) + 7_777)
+
+private fun videoNote(blobId: String, title: String = "视频") = NotePayload(
+    type = NoteType.VIDEO,
+    title = title,
+    videos = listOf(VideoRef(blobId, 1920, 1080, 3_600L)),
+    createdAt = 0L,
+    updatedAt = 0L,
+)
+
+/** 把一个读取器从头读到尾。 */
+private fun readAll(reader: BlobReader): ByteArray {
+    val out = ByteArray(reader.size.toInt())
+    var at = 0
+    while (at < out.size) {
+        val n = reader.readAt(at.toLong(), out, at, out.size - at)
+        if (n <= 0) throw AssertionError("读到 $at 字节时提前结束（应为 ${out.size}）")
+        at += n
+    }
+    return out
+}
 
 private fun assertThrowsIllegalState(
     message: String = "应抛出 IllegalStateException",
@@ -325,7 +360,184 @@ class VaultSessionTest {
         assertFalse("诱饵库自己的孤儿应被清掉", f.blobs.ids.contains(decoyOrphan))
     }
 
+    // ==================== 视频（分块格式） ====================
+
+    @Test
+    fun `视频入库后能按随机访问逐字节读回`() {
+        val f = Fixture()
+        f.unlockReal()
+        val plain = videoBytes()
+
+        val stored = f.session.putVideo(ByteArrayInputStream(plain))
+
+        assertEquals(plain.size.toLong(), stored.plainBytes)
+        val reader = f.session.openBlob(stored.blobId)
+        assertNotNull("视频必须能打开成随机访问读取器", reader)
+        reader!!.use {
+            assertEquals(plain.size.toLong(), it.size)
+            assertArrayEquals("整段读回必须与原文逐字节一致", plain, readAll(it))
+        }
+    }
+
+    @Test
+    fun `视频跨块边界的读取与任意位置读取都正确`() {
+        val f = Fixture()
+        f.unlockReal()
+        val plain = videoBytes()
+        val stored = f.session.putVideo(ByteArrayInputStream(plain))
+
+        f.session.openBlob(stored.blobId)!!.use { reader ->
+            val boundary = ChunkedBlobFormat.DEFAULT_CHUNK_BYTES.toLong()
+            val across = ByteArray(4)
+            assertEquals(4, reader.readAt(boundary - 2, across, 0, 4))
+            assertEquals(plain[(boundary - 2).toInt()], across[0])
+            assertEquals(plain[boundary.toInt()], across[2])
+
+            val rnd = java.util.Random(2026L)
+            repeat(200) {
+                val at = rnd.nextInt(plain.size)
+                val one = ByteArray(1)
+                assertEquals(1, reader.readAt(at.toLong(), one, 0, 1))
+                assertEquals("位置 $at 的字节不对", plain[at], one[0])
+            }
+
+            // 越界是"读完了"（-1），不是"损坏"。
+            assertEquals(-1, reader.readAt(reader.size, ByteArray(1), 0, 1))
+        }
+    }
+
+    @Test
+    fun `图片仍能通过同一个入口打开`() {
+        // 回归：openBlob 在分流处新增了 isChunked 判定，整块格式那条路不能被带坏。
+        val f = Fixture()
+        f.unlockReal()
+        val blobId = f.session.putImage(bytesOf(21))
+
+        f.session.openBlob(blobId)!!.use {
+            assertArrayEquals(bytesOf(21), readAll(it))
+        }
+    }
+
+    @Test
+    fun `视频不能走图片读取路径`() {
+        // 这条挡的是一次 OOM。`image()` 的实现是"整份密文读进堆再解密"，
+        // 而视频上限 2 GiB —— 缩略图、大图、实况探测这几个入口一旦被视频 blob 撞上，
+        // 下场不是"报错说这不是图片"，而是整个进程被系统杀掉。
+        val f = Fixture()
+        f.unlockReal()
+        val stored = f.session.putVideo(ByteArrayInputStream(videoBytes()))
+
+        assertNull("视频不该出现在图片读取的结果里", f.session.image(stored.blobId))
+        assertTrue("视频密文本身还在", f.blobs.ids.contains(stored.blobId))
+    }
+
+    @Test
+    fun `视频重新打开库后仍能读出来`() {
+        val f = Fixture()
+        f.unlockReal()
+        val plain = videoBytes()
+        val stored = f.session.putVideo(ByteArrayInputStream(plain))
+        f.session.create(videoNote(stored.blobId))
+        f.session.lock()
+
+        val reopened = f.reopen()
+        reopened.unlock(f.keyring.unlock(MASTER.toCharArray()).unlockedOrFail())
+
+        val note = reopened.notes().single()
+        assertEquals(NoteType.VIDEO, note.type)
+        assertEquals(stored.blobId, note.payload.videos.single().blobId)
+        assertArrayEquals(plain, readAll(reopened.openBlob(stored.blobId)!!))
+    }
+
+    @Test
+    fun `视频不以明文落盘`() {
+        val f = Fixture()
+        f.unlockReal()
+        val plain = ByteArray(ChunkedBlobFormat.DEFAULT_CHUNK_BYTES * 2)
+        val marker = "视频明文标记".toByteArray(Charsets.UTF_8)
+        // 故意让标记跨块边界：任何一块单独泄漏都不该出现它
+        System.arraycopy(marker, 0, plain, ChunkedBlobFormat.DEFAULT_CHUNK_BYTES - 3, marker.size)
+
+        f.session.putVideo(ByteArrayInputStream(plain))
+
+        assertFalse("分块密文里不该找得到明文片段", f.blobs.containsPlaintext("视频明文标记"))
+    }
+
+    @Test
+    fun `锁定时保存或打开视频都抛出异常`() {
+        val f = Fixture()
+        assertThrowsIllegalState("锁定时保存视频应抛出") {
+            f.session.putVideo(ByteArrayInputStream(videoBytes()))
+        }
+        assertThrowsIllegalState("锁定时打开附件应抛出") {
+            f.session.openBlob("a".repeat(32))
+        }
+    }
+
+    @Test
+    fun `诱饵库既读不出也清不掉真库的视频`() {
+        val f = Fixture()
+        f.unlockReal()
+        val stored = f.session.putVideo(ByteArrayInputStream(videoBytes()))
+        f.session.create(videoNote(stored.blobId))
+        f.session.lock()
+
+        val decoy = f.reopen()
+        decoy.unlock(f.keyring.unlock(DECOY.toCharArray()).unlockedOrFail())
+
+        // 1) 读不出来。
+        //
+        // 注意：分块格式的**打开**不需要密钥 —— 判据是文件头的魔数与长度自洽，
+        // 所以这里可能拿到一个读取器，真正的拒绝发生在第一次解密。
+        // 这个"懒"是有意的：读哪块解哪块，打开一个 2 GiB 的视频不该先把整份文件解一遍。
+        decoy.openBlob(stored.blobId)?.use { reader ->
+            assertThrows(IOException::class.java) {
+                reader.readAt(0, ByteArray(1), 0, 1)
+            }
+        }
+
+        // 2) 也清不掉。这条更要紧：孤儿清扫若按"磁盘上有、我引用的里没有"判定，
+        //    真库的视频会被当成诱饵库的垃圾删掉 —— 一次不可逆的静默损毁。
+        assertEquals("诱饵库里没有孤儿，不该清掉任何东西", 0, decoy.purgeOrphanBlobs())
+        assertTrue("真库的视频密文必须原封不动", f.blobs.ids.contains(stored.blobId))
+    }
+
     // ==================== 增删改 ====================
+
+    @Test
+    fun `删除条目会一并删掉它的视频密文`() {
+        // 漏了这一步的后果很具体：GB 级的密文永远留在库里，
+        // 而界面上已经看不到这条记录了 —— 空间只能靠"清空本机数据"才能收回。
+        val f = Fixture()
+        f.unlockReal()
+        val stored = f.session.putVideo(ByteArrayInputStream(videoBytes()))
+        val note = f.session.create(videoNote(stored.blobId))
+
+        assertEquals(1, f.blobs.size)
+        assertTrue(f.session.delete(note.id))
+        assertEquals("视频密文应随条目一起清掉", 0, f.blobs.size)
+    }
+
+    @Test
+    fun `孤儿清扫不会把被引用的视频当垃圾删掉`() {
+        // 这条挡的是一个会静默毁掉全部视频的错误：purgeOrphanBlobs 的 live 集合
+        // 若只收 images 不收 videos，每一次"清理无用内容"都会把库里**全部**视频
+        // 当成孤儿删掉 —— 记录还留着，表现为"视频全变成打不开的黑块"。
+        val f = Fixture()
+        f.unlockReal()
+        val kept = f.session.putVideo(ByteArrayInputStream(videoBytes(seed = 31)))
+        val note = f.session.create(videoNote(kept.blobId))
+        val orphan = f.session.putVideo(ByteArrayInputStream(videoBytes(seed = 32)))
+        assertEquals(2, f.blobs.size)
+
+        val removed = f.session.purgeOrphanBlobs()
+
+        assertEquals("只应清掉那个没被任何记录引用的", 1, removed)
+        assertTrue("被引用的视频必须保留", f.blobs.ids.contains(kept.blobId))
+        assertFalse("没被引用的那个才该清掉", f.blobs.ids.contains(orphan.blobId))
+        assertNotNull("记录还在，视频还必须能打开", f.session.openBlob(kept.blobId))
+        assertEquals(note.id, f.session.notes().single().id)
+    }
 
     @Test
     fun `删除条目会一并删掉它的图片密文`() {

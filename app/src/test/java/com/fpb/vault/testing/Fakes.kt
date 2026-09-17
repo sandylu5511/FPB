@@ -1,10 +1,18 @@
 package com.fpb.vault.testing
 
+import com.fpb.vault.crypto.AeadCipher
+import com.fpb.vault.data.BlobEmptyException
+import com.fpb.vault.data.BlobReader
 import com.fpb.vault.data.BlobSink
+import com.fpb.vault.data.BlobTooLargeException
+import com.fpb.vault.data.ChunkedBlobFormat
+import com.fpb.vault.data.ChunkedBlobReader
+import com.fpb.vault.data.ChunkedWrite
 import com.fpb.vault.data.CipherRow
 import com.fpb.vault.data.CipherRowStore
 import com.fpb.vault.data.EncryptedBlob
 import java.io.IOException
+import java.io.InputStream
 import java.nio.charset.StandardCharsets
 
 /**
@@ -115,9 +123,26 @@ class InMemoryBlobSink : BlobSink {
 
     private val map = LinkedHashMap<String, EncryptedBlob>()
 
-    val ids: Set<String> get() = map.keys.toSet()
+    /**
+     * 分块附件：blobId → (块序号 → 该块密文) 与头部。
+     *
+     * 与 [map] 分开放，是为了让"整块格式的断言"（比如 [containsPlaintext]、
+     * 单个 nonce 的形状检查）不会被视频的块数据污染 —— 那类断言经常是
+     * "整个 store 里不应出现明文"，混在一起会让它悄悄变成永真。
+     */
+    private class Chunked(
+        val header: ChunkedBlobFormat.Header,
+        val chunks: LinkedHashMap<Int, EncryptedBlob>,
+    ) {
+        val storedBytes: Long get() = chunks.values.sumOf { it.storedBytes } +
+            ChunkedBlobFormat.HEADER_BYTES
+    }
 
-    val size: Int get() = map.size
+    private val chunked = LinkedHashMap<String, Chunked>()
+
+    val ids: Set<String> get() = map.keys.toSet() + chunked.keys
+
+    val size: Int get() = map.size + chunked.size
 
     override fun write(blobId: String, nonce: ByteArray, ciphertext: ByteArray) {
         map[blobId] = EncryptedBlob(nonce.copyOf(), ciphertext.copyOf())
@@ -128,19 +153,118 @@ class InMemoryBlobSink : BlobSink {
         // 否则测试里一次不经意的就地修改会直接改到"落盘"的内容。
         map[blobId]?.let { EncryptedBlob(it.nonce.copyOf(), it.ciphertext.copyOf()) }
 
-    override fun delete(blobId: String): Boolean = map.remove(blobId) != null
+    override fun delete(blobId: String): Boolean =
+        (map.remove(blobId) != null) or (chunked.remove(blobId) != null)
 
-    override fun listIds(): List<String> = map.keys.toList()
+    override fun listIds(): List<String> = map.keys.toList() + chunked.keys
 
-    override fun totalBytes(): Long = map.values.sumOf { it.storedBytes }
+    override fun totalBytes(): Long =
+        map.values.sumOf { it.storedBytes } + chunked.values.sumOf { it.storedBytes }
 
     fun containsPlaintext(needle: String): Boolean {
         val target = needle.toByteArray(StandardCharsets.UTF_8)
         if (target.isEmpty()) return false
-        return map.values.any {
+        val all = map.values.toList() + chunked.values.flatMap { it.chunks.values }
+        return all.any {
             it.ciphertext.containsSequence(target) || it.nonce.containsSequence(target)
         }
     }
+
+    // ==================== 分块格式 ====================
+
+    override fun writeChunked(
+        blobId: String,
+        source: InputStream,
+        chunkSize: Int,
+        limitBytes: Long,
+        seal: (index: Int, plain: ByteArray, length: Int, isLast: Boolean) -> AeadCipher.Sealed,
+    ): ChunkedWrite {
+        val chunks = LinkedHashMap<Int, EncryptedBlob>()
+        var plainSize = 0L
+        var index = 0
+
+        val pending = ByteArray(chunkSize)
+        var pendingLength = readInto(source, pending, chunkSize)
+        try {
+            while (pendingLength > 0) {
+                if (plainSize + pendingLength > limitBytes) throw BlobTooLargeException(limitBytes)
+                // 与真实实现同构：超前读一块，才知道手上这块是不是末块。
+                val next = ByteArray(chunkSize)
+                val nextLength = readInto(source, next, chunkSize)
+                val sealed = seal(index, pending, pendingLength, nextLength <= 0)
+                chunks[index] = EncryptedBlob(sealed.nonce.copyOf(), sealed.ciphertext.copyOf())
+                plainSize += pendingLength
+                index++
+                System.arraycopy(next, 0, pending, 0, nextLength)
+                pendingLength = nextLength
+            }
+            if (plainSize <= 0) throw BlobEmptyException()
+            chunked[blobId] = Chunked(ChunkedBlobFormat.headerOf(plainSize, chunkSize), chunks)
+            return ChunkedWrite(
+                plainBytes = plainSize,
+                storedBytes = chunks.values.sumOf { it.storedBytes } + ChunkedBlobFormat.HEADER_BYTES,
+            )
+        } finally {
+            // 失败时不留痕：真实实现是删掉 .part 临时文件，这里是"没写进去"。
+            // 两者对外表现必须一致，否则测试会通过而真机上留下垃圾。
+            if (chunked[blobId]?.chunks !== chunks) chunks.clear()
+        }
+    }
+
+    override fun chunkHeader(blobId: String): ChunkedBlobFormat.Header? = chunked[blobId]?.header
+
+    override fun openChunked(blobId: String, open: ChunkedBlobReader.ChunkOpener): BlobReader? {
+        val stored = chunked[blobId] ?: return null
+        val header = stored.header
+        // 按需解密 + 缓存，与真实实现的语义对齐：读到坏块要抛 IOException，
+        // 而不是伪装成"读完了"。测试若要验证"损坏必须报错"，这一层不能偷懒。
+        val cache = HashMap<Int, ByteArray>()
+        return object : BlobReader {
+            override val size: Long get() = header.plainSize
+
+            override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+                if (position < 0 || position >= header.plainSize) return -1
+                if (size <= 0) return 0
+                val total = minOf(size.toLong(), header.plainSize - position).toInt()
+                var copied = 0
+                var cursor = position
+                while (copied < total) {
+                    val chunkIndex = (cursor / header.chunkSize).toInt()
+                    val plain = cache.getOrPut(chunkIndex) {
+                        val blob = stored.chunks[chunkIndex]
+                            ?: throw IOException("附件缺块: $chunkIndex")
+                        open.open(
+                            chunkIndex,
+                            blob.nonce,
+                            blob.ciphertext,
+                            chunkIndex == header.chunkCount - 1,
+                        ) ?: throw IOException("附件第 $chunkIndex 块校验失败")
+                    }
+                    val within = (cursor % header.chunkSize).toInt()
+                    val take = minOf(plain.size - within, total - copied)
+                    System.arraycopy(plain, within, buffer, offset + copied, take)
+                    copied += take
+                    cursor += take
+                }
+                return copied
+            }
+
+            override fun close() {
+                cache.clear()
+            }
+        }
+    }
+}
+
+/** 把一个流填满 [max] 字节（除非先读到结尾），与 `FileBlobStore.readUpTo` 同义。 */
+private fun readInto(source: InputStream, buffer: ByteArray, max: Int): Int {
+    var total = 0
+    while (total < max) {
+        val read = source.read(buffer, total, max - total)
+        if (read <= 0) break
+        total += read
+    }
+    return total
 }
 
 private fun ByteArray.containsSequence(target: ByteArray): Boolean {

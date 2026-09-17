@@ -12,6 +12,7 @@ enum class NoteType {
     IMAGE,
     CHECKLIST,
     CREDENTIAL,
+    VIDEO,
 }
 
 /** 指向一条已加密落盘的图片。宽高只是为了列表页占位，不是解密后的尺寸来源。 */
@@ -22,6 +23,35 @@ data class ImageRef(
 ) {
     init {
         require(width >= 0 && height >= 0) { "图片尺寸不能为负" }
+    }
+}
+
+/**
+ * 指向一段已加密落盘的视频。
+ *
+ * ## 为什么不复用 [ImageRef]
+ *
+ * 三个字段里只有 blobId 是共通的。[width] / [height] 看着也能共用，
+ * 但视频的宽高**必须**是"按旋转角摆正之后"的显示尺寸 —— 手机竖拍的视频
+ * 常常是 1920×1080 的帧加上 90° 旋转标记，直接拿帧宽高去占位会得到一个横躺的格子。
+ * [durationMs] 更是只有视频才有，它对网格上的时长角标、详情页的展示都是必需的。
+ *
+ * 塞进 [ImageRef] 的后果是"图片"这个概念下的每一个消费点都要先判一下它到底是不是视频，
+ * 而漏判一处就会表现为"把视频当图片解码 → 一片空白"。
+ */
+data class VideoRef(
+    val blobId: String,
+    /** 摆正后的显示宽度（已考虑旋转角）。 */
+    val width: Int,
+    /** 摆正后的显示高度（已考虑旋转角）。 */
+    val height: Int,
+    /** 时长（毫秒）。取不到时为 0，界面按"未知"显示，不假装是 0 秒。 */
+    val durationMs: Long = 0L,
+) {
+    init {
+        require(blobId.isNotEmpty()) { "视频引用的 blobId 不能为空" }
+        require(width >= 0 && height >= 0) { "视频尺寸不能为负" }
+        require(durationMs >= 0) { "视频时长不能为负" }
     }
 }
 
@@ -59,6 +89,7 @@ data class NotePayload(
     val updatedAt: Long,
     val favorite: Boolean = false,
     val images: List<ImageRef> = emptyList(),
+    val videos: List<VideoRef> = emptyList(),
     val todos: List<TodoItem> = emptyList(),
     val fields: List<SecretField> = emptyList(),
 ) {
@@ -78,11 +109,7 @@ data class NotePayload(
                 if (f.sensitive) "${f.label} ••••" else "${f.label} ${f.value}"
             }
 
-            NoteType.IMAGE -> if (images.isEmpty()) {
-                body
-            } else {
-                "${images.size} 张图片" + if (body.isBlank()) "" else " · $body"
-            }
+            NoteType.IMAGE, NoteType.VIDEO -> mediaSummary(this)
 
             NoteType.TEXT -> body
         }
@@ -97,10 +124,21 @@ data class NotePayload(
      */
     fun searchableText(): String = buildString {
         append(title.lowercase()).append('\n')
-        // 图库导入的图片记录标题是**显示时按创建时间派生**的、不落盘
+        // 图库导入的图片/视频记录标题是**显示时按创建时间派生**的、不落盘
         // （原因见 com.fpb.vault.vault.PhotoRecord），所以这里单独补上那个词 ——
-        // 否则"搜照片"就再也搜不到那些记录了，而这正是用户会用的搜法。
-        if (type == NoteType.IMAGE && title.isBlank()) {
+        // 否则"搜照片/视频"就再也搜不到那些记录了，而这正是用户会用的搜法。
+        if (title.isBlank() && type == NoteType.IMAGE) {
+            append(IMAGE_TITLE_WORD.lowercase()).append('\n')
+        }
+        if (title.isBlank() && type == NoteType.VIDEO) {
+            append(VIDEO_TITLE_WORD.lowercase()).append('\n')
+        }
+        // 一条记录里可能既有图又有视频（编辑器里可以两样都加）。这时代表词按**内容**补，
+        // 而不是按类型 —— 否则搜"视频"只能搜到视频记录，搜不到"图片记录里带着的那段视频"。
+        if (videos.isNotEmpty() && type != NoteType.VIDEO) {
+            append(VIDEO_TITLE_WORD.lowercase()).append('\n')
+        }
+        if (images.isNotEmpty() && type != NoteType.IMAGE) {
             append(IMAGE_TITLE_WORD.lowercase()).append('\n')
         }
         append(body.lowercase()).append('\n')
@@ -143,18 +181,22 @@ data class NotePayload(
             }
             .filter { it.label.isNotEmpty() },
         images = images.take(MAX_IMAGES),
+        videos = videos.take(MAX_VIDEOS),
     )
 
     companion object {
         const val SUMMARY_CHARS = 90
 
         /**
-         * 照片记录的检索词，同时是派生标题的前缀。
+         * 图片记录的检索词，同时是派生标题的前缀。
          *
          * 放在模型层而不是 `PhotoRecord` 里，是为了不让 `model` 反过来依赖 `vault` ——
          * 而 [searchableText] 需要它。
          */
         const val IMAGE_TITLE_WORD = "照片"
+
+        /** 视频记录的检索词，与 [IMAGE_TITLE_WORD] 同理（见 [searchableText]）。 */
+        const val VIDEO_TITLE_WORD = "视频"
 
         const val MAX_TITLE_CHARS = 200
         const val MAX_BODY_CHARS = 200_000
@@ -166,6 +208,62 @@ data class NotePayload(
         const val MAX_FIELD_LABEL_CHARS = 64
         const val MAX_FIELD_VALUE_CHARS = 8_192
         const val MAX_IMAGES = 100
+
+        /**
+         * 单条记录里的视频条数上限。
+         *
+         * 比 [MAX_IMAGES] 小得多，因为两边的代价不是一个量级：图片一条几百 KB 到几 MB，
+         * 视频一条上限 2 GiB。真放开到 100 条，一条记录就能塞满 200 GiB ——
+         * 而"一条记录可能占多大"的上界，是别处（存储占用展示、孤儿清扫、
+         * 备份包的体量）都默认依赖的一个量。
+         */
+        const val MAX_VIDEOS = 20
+
+        /**
+         * 媒体记录的摘要（`2 张图片` / `1 段视频 · 0:42` / `2 张图片 + 1 段视频 · 1:05`）。
+         *
+         * 只有单一媒体且没有附加正文时，产出与旧版本**逐字符相同**（`1 张图片`）——
+         * 列表页的摘要会被单测钉住，也会被用户的截图对照，改了没有收益却会制造噪音。
+         */
+        private fun mediaSummary(payload: NotePayload): String {
+            val media = buildList {
+                if (payload.images.isNotEmpty()) add("${payload.images.size} 张图片")
+                if (payload.videos.isNotEmpty()) add("${payload.videos.size} 段视频")
+            }.joinToString(" + ")
+
+            // 时长只在真有视频且取得到时才显示。取不到（0）时**不假装是 0 秒** ——
+            // 那会让用户以为这段视频坏了。
+            val totalMs = payload.videos.sumOf { it.durationMs }
+            val head = when {
+                media.isEmpty() -> ""
+                payload.videos.isNotEmpty() && totalMs > 0 -> "$media · ${formatDuration(totalMs)}"
+                else -> media
+            }
+
+            return when {
+                head.isEmpty() -> payload.body
+                payload.body.isBlank() -> head
+                else -> "$head · ${payload.body}"
+            }
+        }
+
+        /**
+         * `0:42` / `12:05` / `1:02:33`。
+         *
+         * 不能偷懒写成"总秒数 ÷ 60"：那对 1 小时以上的素材会给出 `62:33` 这种读不出
+         * 到底是"62 分"还是"62 秒"的数字。
+         */
+        internal fun formatDuration(millis: Long): String {
+            val totalSeconds = (millis / 1000).coerceAtLeast(0)
+            val hours = totalSeconds / 3600
+            val minutes = (totalSeconds % 3600) / 60
+            val seconds = totalSeconds % 60
+            return if (hours > 0) {
+                "%d:%02d:%02d".format(hours, minutes, seconds)
+            } else {
+                "%d:%02d".format(minutes, seconds)
+            }
+        }
 
         /** 把多行文本压成一行，并截断到 [limit]。 */
         private fun flatten(source: String, limit: Int): String {

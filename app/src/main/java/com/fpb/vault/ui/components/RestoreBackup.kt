@@ -93,7 +93,7 @@ fun RestoreConfirmDialog(
 
                     else -> {
                         Text("导出时间：${formatBackupTime(info?.createdAt ?: 0L)}")
-                        Text("内容：约 ${info?.noteRows ?: 0} 条记录、${info?.attachments ?: 0} 张图片")
+                        Text("内容：约 ${info?.noteRows ?: 0} 条记录、${info?.attachments ?: 0} 个附件")
                         Spacer(Modifier.height(8.dp))
                         Text(
                             text = "导入会用这个包里的内容替换本机全部数据，" +

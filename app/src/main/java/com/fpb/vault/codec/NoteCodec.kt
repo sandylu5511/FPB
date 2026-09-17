@@ -5,6 +5,7 @@ import com.fpb.vault.model.NotePayload
 import com.fpb.vault.model.NoteType
 import com.fpb.vault.model.SecretField
 import com.fpb.vault.model.TodoItem
+import com.fpb.vault.model.VideoRef
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -24,12 +25,12 @@ import java.nio.charset.StandardCharsets
  * 3. **零依赖**：不引入 kotlinx.serialization，也就没有反射与 R8 保留规则的问题 ——
  *    对一个靠"代码不被误裁剪"活着的加密应用来说，少一个变量就是少一个风险点。
  *
- * ## 格式（v1，全部大端序）
+ * ## 格式（全部大端序）
  *
  * ```
  * magic        4 字节  "MXN1"
- * version      1 字节  = 1
- * type         1 字节  1=TEXT 2=IMAGE 3=CHECKLIST 4=CREDENTIAL
+ * version      1 字节  1 或 2（见下）
+ * type         1 字节  1=TEXT 2=IMAGE 3=CHECKLIST 4=CREDENTIAL 5=VIDEO
  * flags        1 字节  bit0 = 收藏
  * createdAt    8 字节  毫秒时间戳
  * updatedAt    8 字节  毫秒时间戳
@@ -39,9 +40,25 @@ import java.nio.charset.StandardCharsets
  * images       list<string blobId, int32 w, int32 h>
  * todos        list<string text, byte done>
  * fields       list<string label, string value, byte sensitive>
+ * videos       list<string blobId, int32 w, int32 h, int64 durationMs>   ← 仅 v2
  * ```
  *
  * `string` = `int32 字节长度` + `UTF-8 字节`；`list` = `int32 元素个数` + 元素。
+ *
+ * ## 为什么是 v2 而不是"v1 再加一个字段"
+ *
+ * [videos] 是**追加在流末尾**的。如果版本号不变，老版本读到它不认识的那一段时，
+ * 只会在末尾那道"尾部必须干净"的校验上失败 —— 于是**已经装机的老版本**打开自己的库
+ * 会发现记录全变成"待修复"。升版本号让老版本能明确说出"这条记录的格式版本比应用新"，
+ * 而不是把它当成损坏。
+ *
+ * 反过来，**新版本必须能读 v1**：库里已经存在的老记录全是 v1，
+ * 读到它们时 [videos] 一律按空表处理。这条兼容不是可选项 ——
+ * 少了它就是"升级应用之后所有历史记录消失"。
+ *
+ * 注意"尾部必须干净"这条校验对 v1 与 v2 **都保留**：它挡的是"写入方与读取方
+ * 对格式的理解已经不一致"这种更隐蔽的情况，不能因为引入了版本分支就把它放松成
+ * "多余的字节就算了"。
  *
  * ## 解码器的立场
  *
@@ -52,7 +69,11 @@ import java.nio.charset.StandardCharsets
  */
 object NoteCodec {
 
-    const val SCHEMA_VERSION = 1
+    /** 当前写入的版本。 */
+    const val SCHEMA_VERSION = 2
+
+    /** 还能读的最老版本。 */
+    private const val LEGACY_VERSION = 1
 
     private val MAGIC = byteArrayOf(0x4D, 0x58, 0x4E, 0x31) // "MXN1"
 
@@ -60,6 +81,7 @@ object NoteCodec {
     private const val CODE_IMAGE = 2
     private const val CODE_CHECKLIST = 3
     private const val CODE_CREDENTIAL = 4
+    private const val CODE_VIDEO = 5
 
     private const val FLAG_FAVORITE = 0x01
 
@@ -108,6 +130,19 @@ object NoteCodec {
                 writeString(d, it.value)
                 d.writeBoolean(it.sensitive)
             }
+
+            // videos 追加在**所有老字段之后**。这是它能在 v1 基础上安全扩展的前提：
+            // 老版本的读取顺序与偏移完全不受影响，只是它会在末尾的"尾部必须干净"上失败。
+            d.writeInt(payload.videos.size)
+            payload.videos.forEach {
+                require(com.fpb.vault.data.RowIds.isValid(it.blobId)) {
+                    "视频引用的 blobId 形状非法（应为 32 位十六进制）：${it.blobId}"
+                }
+                writeString(d, it.blobId)
+                d.writeInt(it.width)
+                d.writeInt(it.height)
+                d.writeLong(it.durationMs)
+            }
         }
         return out.toByteArray()
     }
@@ -131,7 +166,10 @@ object NoteCodec {
         if (!magic.contentEquals(MAGIC)) return null
 
         val version = input.readUnsignedByte()
-        if (version != SCHEMA_VERSION) return null
+        // 只接受"能读的版本区间"。上界不是 [SCHEMA_VERSION] 而是个明确的白名单：
+        // 将来写到 v3 时，这个判断要显式改一次，而不是靠"版本号比我大所以拒绝"这种
+        // 猜出来的规则 —— 那种写法在版本号回退时会把可读的数据判成不可读。
+        if (version != LEGACY_VERSION && version != SCHEMA_VERSION) return null
 
         val type = typeOf(input.readUnsignedByte()) ?: return null
         val flags = input.readUnsignedByte()
@@ -166,6 +204,26 @@ object NoteCodec {
             )
         }
 
+        // v1 里没有这一段，所以**必须按版本分流**而不是"试着读一读、失败就当空"：
+        // 后者会把"v1 记录恰好以合法块开头的尾部字节"读成视频引用，
+        // 也会把真正的损坏悄悄咽掉。
+        val videos = if (version >= 2) {
+            readList(input) {
+                val blobId = readString(input)
+                val width = input.readInt()
+                val height = input.readInt()
+                val durationMs = input.readLong()
+                if (width < 0 || height < 0) throw IllegalArgumentException("视频尺寸为负")
+                if (durationMs < 0) throw IllegalArgumentException("视频时长为负")
+                if (!com.fpb.vault.data.RowIds.isValid(blobId)) {
+                    throw IllegalArgumentException("blobId 形状非法")
+                }
+                VideoRef(blobId, width, height, durationMs)
+            }
+        } else {
+            emptyList()
+        }
+
         // 尾部必须干净。多出来的字节说明写入方与读取方对格式的理解已经不一致，
         // 此时"忽略多余部分"会把格式错位伪装成正常读取。
         if (input.available() != 0) return null
@@ -179,6 +237,7 @@ object NoteCodec {
             updatedAt = updatedAt,
             favorite = flags and FLAG_FAVORITE != 0,
             images = images,
+            videos = videos,
             todos = todos,
             fields = fields,
         )
@@ -233,6 +292,7 @@ object NoteCodec {
         NoteType.IMAGE -> CODE_IMAGE
         NoteType.CHECKLIST -> CODE_CHECKLIST
         NoteType.CREDENTIAL -> CODE_CREDENTIAL
+        NoteType.VIDEO -> CODE_VIDEO
     }
 
     private fun typeOf(code: Int): NoteType? = when (code) {
@@ -240,6 +300,7 @@ object NoteCodec {
         CODE_IMAGE -> NoteType.IMAGE
         CODE_CHECKLIST -> NoteType.CHECKLIST
         CODE_CREDENTIAL -> NoteType.CREDENTIAL
+        CODE_VIDEO -> NoteType.VIDEO
         else -> null
     }
 

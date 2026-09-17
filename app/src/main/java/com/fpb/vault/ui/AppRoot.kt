@@ -146,7 +146,7 @@ private fun UnlockedHost(state: VaultAppState) {
         is Route.Editor -> NoteEditorScreen(state, route)
         is Route.View -> NoteViewScreen(state, route)
         is Route.Viewer -> ImageViewerScreen(state, route)
-        Route.Photos -> PhotoLibraryScreen(state)
+        Route.Photos -> MediaLibraryScreen(state)
         Route.Settings -> SettingsScreen(state)
     }
 }

@@ -10,19 +10,36 @@ import com.fpb.vault.crypto.SecureBytes
 import com.fpb.vault.crypto.UnlockOutcome
 import com.fpb.vault.crypto.VaultDek
 import com.fpb.vault.crypto.VaultDomain
+import com.fpb.vault.data.BlobReader
 import com.fpb.vault.data.BlobSink
+import com.fpb.vault.data.ByteArrayBlobReader
+import com.fpb.vault.data.ChunkedBlobFormat
+import com.fpb.vault.data.ChunkedBlobReader
 import com.fpb.vault.data.CipherRow
 import com.fpb.vault.data.CipherRowStore
 import com.fpb.vault.data.RowIds
 import com.fpb.vault.data.toHex
+import com.fpb.vault.model.ImageRef
 import com.fpb.vault.model.NotePayload
 import com.fpb.vault.model.VaultNote
+import com.fpb.vault.model.VideoRef
+import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /** 标签及其条目数量。 */
 data class TagCount(val name: String, val count: Int)
+
+/**
+ * 一段刚入库的视频：它的 blobId 与明文长度。
+ *
+ * 明文的**宽高与时长不在这里** —— 那要靠 `MediaMetadataRetriever` 解出来，
+ * 而那需要 Android 运行时。会话层是纯 JVM（整个 `crypto` / `session` / `codec`
+ * 都是这样，好在单测里跑），所以探测元数据这件事交给上层，见
+ * [com.fpb.vault.vault.VideoPipeline]。
+ */
+class StoredVideo(val blobId: String, val plainBytes: Long)
 
 /**
  * 一次"打开着的保险库"。
@@ -365,11 +382,15 @@ class VaultSession(
             throw t
         }
 
+        // 图片与视频的密文都要销毁。**漏掉 videos 会得到一个很隐蔽的后果**：
+        // 记录没了、界面上干净了，但 GB 级的视频密文永远留在附件目录里，
+        // 占用页面上也只会看到"存储占用"莫名其妙很高，而没有任何一条记录对得上。
         existing.images.forEach { blobs.delete(it.blobId) }
+        existing.videos.forEach { blobs.delete(it.blobId) }
         return true
     }
 
-    // ==================== 图片 ====================
+    // ==================== 附件（图片 / 视频） ====================
 
     /**
      * 加密保存一张图片，返回它的 blobId。
@@ -400,11 +421,41 @@ class VaultSession(
         return blobId
     }
 
+    /**
+     * 读一份**整块格式**的附件（图片、实况照片）。
+     *
+     * ## 分块格式必须在这里就被挡掉（这条是补上的，不是一开始就想清楚的）
+     *
+     * [BlobSink.read] 是 `file.readBytes()` —— 整份密文先进堆。对图片这没问题（几 MB），
+     * 对视频则是**一次 OOM**：视频上限 2 GiB，而"图片路径"有好几个入口
+     * （缩略图、大图、实况探测）都可能被一个视频 blob 撞上，
+     * 撞上之后的下场不是"报错说这不是图片"，而是整个进程被系统杀掉。
+     *
+     * 所以这里按魔数先分流，视频一律返回 null（= 读不出来），
+     * 走视频的一律用 [openBlob] 拿随机访问读取器。
+     */
     fun image(blobId: String): ByteArray? {
         if (!RowIds.isValid(blobId)) return null
+        if (isChunked(blobId)) return null
+        return readWhole(blobId)
+    }
+
+    /**
+     * 整块格式的解密读取。**调用方必须先确认它不是分块格式** ——
+     * 这里不做检查，是因为 [openBlob] 已经查过一遍，再查就是把文件头读两遍。
+     */
+    private fun readWhole(blobId: String): ByteArray? {
         val blob = blobs.read(blobId) ?: return null
         return AeadCipher.open(requireUnlocked(), blob.nonce, blob.ciphertext, Aad.blob(blobId))
     }
+
+    /**
+     * 这个附件是不是分块格式（视频）。
+     *
+     * 只读 24 字节文件头 + 一次 `length()`，可以放心放在热路径上；
+     * 判据的可靠性由 [BlobSink.chunkHeader] 负责（魔数 + 长度双校验）。
+     */
+    private fun isChunked(blobId: String): Boolean = blobs.chunkHeader(blobId) != null
 
     fun deleteImage(blobId: String): Boolean {
         requireUnlocked()
@@ -412,29 +463,141 @@ class VaultSession(
         return blobs.delete(blobId)
     }
 
+    // ==================== 视频 ====================
+
     /**
-     * 清理不再被任何笔记引用的图片密文。
+     * 流式加密保存一段视频，返回它的 blobId 与明文长度。
+     *
+     * ## 为什么不是 `putVideo(bytes: ByteArray)`
+     *
+     * 上限是 [MAX_VIDEO_PLAINTEXT_BYTES]（2 GiB）。把 2 GiB 先读进堆再交给这里，
+     * 等于在设计上就写死了"这段功能只能用于小视频" —— 而手机随手一段 4K 就几百 MB。
+     * 所以入参是**流**：本层按 [ChunkedBlobFormat.DEFAULT_CHUNK_BYTES] 一块一块地读、
+     * 加密、落盘，任何时刻只有两块（含超前读的那一块）明文在内存里。
+     *
+     * 超限时 [BlobSink.writeChunked] 直接抛 [com.fpb.vault.data.BlobTooLargeException]，
+     * 且**不留下任何文件**（临时文件在 finally 里删掉）。这里刻意不把它转成 `require`：
+     * "素材太大"与"代码写错了"必须能被上层区分开 —— 前者要告诉用户
+     * "这个视频有 2.4 GB，超过上限"，后者只该走崩溃或日志。
+     *
+     * 明文的宽高与时长不在这里取（那要 Android 运行时，见 [StoredVideo] 的说明）。
+     */
+    fun putVideo(source: InputStream): StoredVideo {
+        val dek = requireUnlocked()
+        val blobId = idFactory()
+        val chunkSize = ChunkedBlobFormat.DEFAULT_CHUNK_BYTES
+        val write = blobs.writeChunked(
+            blobId = blobId,
+            source = source,
+            chunkSize = chunkSize,
+            limitBytes = MAX_VIDEO_PLAINTEXT_BYTES,
+        ) { index, plain, length, isLast ->
+            // 只加密这一块实际有的字节。多送一个字节都不行 ——
+            // 块边界的字节数直接决定偏移算术，而偏移是**不查表**算出来的。
+            AeadCipher.seal(
+                dek,
+                plain.copyOf(length),
+                Aad.blobChunk(blobId, index, chunkSize, isLast),
+            )
+        }
+        return StoredVideo(blobId, write.plainBytes)
+    }
+
+    /**
+     * 打开任意附件的**随机访问**读取器（图片、视频通用）。
+     *
+     * 按文件内部的魔数自动分流：
+     * - 分块格式（视频）→ [ChunkedBlobReader]，读哪块解哪块；
+     * - 整块格式（图片、实况照片）→ 整份解密后包成 [ByteArrayBlobReader]。
+     *
+     * 返回 null 表示"读不出来"（文件不存在、密文损坏、认证失败），
+     * 调用方一律按"这个附件打不开"处理 —— 与 [image] 的约定一致。
+     *
+     * 调用方负责 [BlobReader.close]。
+     */
+    fun openBlob(blobId: String): BlobReader? {
+        val dek = requireUnlocked()
+        if (!RowIds.isValid(blobId)) return null
+
+        val header = blobs.chunkHeader(blobId)
+        if (header != null) {
+            // AAD 里的块大小取自**从文件读回来的头**，与写入时回填的那个必须是同一个值。
+            // 头被改过时，块大小一变，AAD 就对不上，解密一律失败 —— 这是有意的。
+            return blobs.openChunked(blobId) { index, nonce, ciphertext, isLast ->
+                AeadCipher.open(
+                    dek,
+                    nonce,
+                    ciphertext,
+                    Aad.blobChunk(blobId, index, header.chunkSize, isLast),
+                )
+            }
+        }
+
+        val plaintext = readWhole(blobId) ?: return null
+        return ByteArrayBlobReader(plaintext)
+    }
+
+    /**
+     * 这个附件是不是可以用当前 DEK 解开的（归属判定，供孤儿清扫使用）。
+     *
+     * ## 视频这里有一条必须守住的规模纪律
+     *
+     * 老实现（只处理图片）是"把整个密文解一遍"。对视频**绝不能照搬** ——
+     * 一个 2 GiB 的视频会让这一步直接把堆吃光，而孤儿清扫是启动路径上的操作。
+     * 分块格式存在的意义正是"不必整段解密"，所以视频只解**第 0 块**：
+     * 第 0 块的 AAD 绑定了 blobId 与块大小，能解开就说明它属于当前域。
+     */
+    private fun ownedByThisVault(blobId: String): Boolean {
+        val dek = requireUnlocked()
+        val header = blobs.chunkHeader(blobId)
+        if (header != null) {
+            val reader = blobs.openChunked(blobId) { index, nonce, ciphertext, isLast ->
+                AeadCipher.open(
+                    dek,
+                    nonce,
+                    ciphertext,
+                    Aad.blobChunk(blobId, index, header.chunkSize, isLast),
+                )
+            } ?: return false
+            return try {
+                // 只碰第一块，读到 1 个字节就够：认证发生在解密的那一刻。
+                reader.readAt(0, ByteArray(1), 0, 1) == 1
+            } catch (e: java.io.IOException) {
+                false
+            } finally {
+                reader.close()
+            }
+        }
+
+        val blob = blobs.read(blobId) ?: return false
+        return AeadCipher.open(dek, blob.nonce, blob.ciphertext, Aad.blob(blobId)) != null
+    }
+
+    /**
+     * 清理不再被任何笔记引用的附件密文（图片与视频）。
      *
      * ## 这里有个会毁掉另一个库的陷阱
      *
      * 最直觉的写法是"磁盘上存在、但当前索引里没引用到的 blobId 就是孤儿"。
-     * 但如果当前会话是**诱饵库**，真库的图片恰好全部符合这个描述 ——
-     * 一次"清理垃圾"就会把真库的照片全部删掉，而且悄无声息。
+     * 但如果当前会话是**诱饵库**，真库的附件恰好全部符合这个描述 ——
+     * 一次"清理垃圾"就会把真库的照片与视频全部删掉，而且悄无声息。
      *
-     * 因此这里加了一道判定：只有能用**当前域的 DEK 解开**的附件才算自己的孤儿。
-     * 代价是要对整个密文跑一次认证（几 MB 的图片约几毫秒），
+     * 因此这里加了一道判定：只有能用**当前域的 DEK 解开**的附件才算自己的孤儿
+     * （见 [ownedByThisVault]，它对视频只解第一块，不会把一个 2 GiB 的视频读进内存）。
+     * 代价是要对密文跑一次认证（几 MB 的图片约几毫秒），
      * 但这是个手动触发、低频次的操作，换来的是"不可能误删另一个库"。
      */
     fun purgeOrphanBlobs(): Int {
-        val dek = requireUnlocked()
-        val live = index.values.flatMap { it.images }.map { it.blobId }.toSet()
+        // **视频也要算进"活着"的集合**。漏掉的话，每一次孤儿清扫都会把库里
+        // 全部视频的密文当作垃圾删掉 —— 而记录还留着，表现为"视频全变成打不开的黑块"。
+        val live = index.values
+            .flatMap { it.images.map(ImageRef::blobId) + it.videos.map(VideoRef::blobId) }
+            .toSet()
 
         var removed = blobs.purgeStaleTempFiles()
         blobs.listIds().forEach { blobId ->
             if (blobId in live) return@forEach
-            val blob = blobs.read(blobId) ?: return@forEach
-            val own = AeadCipher.open(dek, blob.nonce, blob.ciphertext, Aad.blob(blobId)) != null
-            if (own && blobs.delete(blobId)) removed++
+            if (ownedByThisVault(blobId) && blobs.delete(blobId)) removed++
         }
         return removed
     }
@@ -617,6 +780,24 @@ class VaultSession(
          * 与解锁无关——解锁只读索引清单，不解密图片字节。
          */
         const val MAX_IMAGE_PLAINTEXT_BYTES = 32 * 1024 * 1024
+
+        /**
+         * 单条视频明文允许的最大字节数（2 GiB）。
+         *
+         * 它比图片上限大两个数量级，是因为**约束的性质完全不同**：
+         * 图片那条 32 MiB 挡的是"解码成 bitmap 时的内存"（一张 32 MiB 的 JPEG
+         * 解出来是几百 MB），而视频走分块解密，播放时内存只占一个缓存窗口。
+         * 视频这里挡的是**磁盘占用**与"用户是不是选错了文件"。
+         *
+         * 2 GiB 覆盖了手机上几乎所有日常拍摄：1080p30 约 2 MB/s（约 17 分钟），
+         * 4K60 约 20 MB/s（约 100 秒）。再长的素材放不进来，会有明确提示，
+         * 而不是静默失败。
+         *
+         * 注意它与 [ChunkedBlobFormat.MAX_PLAIN_BYTES]（4 GiB）不是一回事：
+         * 那是格式层面的合理性边界（防一个被改过的头让我们去分配天文数字），
+         * 这里是产品决定。将来放宽这里，格式那边不用动。
+         */
+        const val MAX_VIDEO_PLAINTEXT_BYTES = 2L * 1024 * 1024 * 1024
 
         private const val MANIFEST_ID_BYTES = 16
         private const val INDEX_AAD_FIELD = "index"

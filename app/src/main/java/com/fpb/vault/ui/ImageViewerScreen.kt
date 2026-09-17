@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -33,10 +34,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -64,6 +69,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.fpb.vault.data.BlobReader
+import com.fpb.vault.model.NotePayload
+import com.fpb.vault.model.NoteType
+import com.fpb.vault.ui.components.VideoPlayGlyph
+import com.fpb.vault.vault.BlobMediaSource
 import com.fpb.vault.vault.MotionPhoto
 import com.fpb.vault.vault.MotionPlayback
 import kotlinx.coroutines.Job
@@ -110,6 +120,23 @@ import kotlin.math.min
  *   用户按过"停止"的那一张不再自动开播，翻页则重新判定。
  * - **画面不拉伸**（原来是纵向拉开变形）。根因不在缩放模式，而在 Surface 的尺寸：
  *   见 [PlayerHolder.startIfReady] 的长注释。
+ *
+ * ## 视频
+ *
+ * 进来的 `blobIds` 是一条**跨记录的媒体序列**（照片和视频混在一起，见媒体库），
+ * 所以每一页都要先问一句"这一页该当图看还是当视频放" —— 判据是记录内容，
+ * 由 [VaultAppState.blobKinds] 一次性给出。视频页交给 [VideoPage]，
+ * 照片页仍是 [ZoomableImage]。
+ *
+ * 与实况照片那条路的三处关键差别：
+ *
+ * 1. **不必先读进内存。** 视频是分块加密的（见 [com.fpb.vault.data.ChunkedBlobFormat]），
+ *    交给播放器的是一个按需解密的随机访问读取器（[BlobMediaSource]）——
+ *    所以视频能到 2 GiB，而实况影片只能整段进堆。
+ * 2. **比例一开始就已知。** 视频的宽高在入库时就探测好并写在记录里
+ *    （见 [com.fpb.vault.vault.VideoPipeline.probe]），不必等播放器的尺寸回调，
+ *    Surface 从第一次布局起就是对的。实况照片那条路恰恰相反，只能等回调。
+ * 3. **有控制条。** 实况是"看一眼就完了"，自动播完即止；视频需要暂停、拖进度。
  */
 @Composable
 fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
@@ -126,6 +153,16 @@ fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
     )
     val scope = rememberCoroutineScope()
     val currentBlobId = route.blobIds.getOrNull(pagerState.currentPage)
+
+    /**
+     * 每个附件的类型（视频另带摆正后的宽高）。
+     *
+     * 一次算好给整条序列用，而不是让每一页自己去查：滑动时 `HorizontalPager` 会同时
+     * 组合相邻的页，每页各查一次就得把整个库的记录摊平好几遍。
+     */
+    val kinds = remember(state.notes) { state.blobKinds() }
+    val currentKind = currentBlobId?.let { kinds[it] }
+    val currentIsVideo = currentKind?.type == NoteType.VIDEO
 
     var motion by remember { mutableStateOf<MotionPhoto.Motion?>(null) }
     var video by remember { mutableStateOf<ByteArray?>(null) }
@@ -150,6 +187,10 @@ fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
         loadingVideo = false
         if (id == null) return@LaunchedEffect
 
+        // 视频页不做实况探测：这条路径会把**整份附件**读进堆（见 VaultSession.image
+        // 的注释），而它对应的可能是 2 GiB 的视频 —— 那不是"白跑一次"，是一次 OOM。
+        if (currentIsVideo) return@LaunchedEffect
+
         val detected = state.ensureMotion(id)
         motion = detected
         if (!MotionPlayback.shouldAutoPlay(detected, id, stoppedByUser)) return@LaunchedEffect
@@ -171,7 +212,20 @@ fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
             .background(Color.Black),
     ) {
         HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-            ZoomableImage(state = state, blobId = route.blobIds[page])
+            val pageBlobId = route.blobIds[page]
+            val kind = kinds[pageBlobId]
+            if (kind?.type == NoteType.VIDEO) {
+                VideoPage(
+                    state = state,
+                    blobId = pageBlobId,
+                    kind = kind,
+                    // 只有"当前这一页"才真的建播放器：滑动时相邻页也会被组合，
+                    // 而每建一个播放器就占掉一个硬解码器。
+                    active = page == pagerState.currentPage,
+                )
+            } else {
+                ZoomableImage(state = state, blobId = pageBlobId)
+            }
         }
 
         // 播放层压在图片之上、顶栏之下：顶栏里的"停止"必须始终够得着。
@@ -232,10 +286,14 @@ fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
                 )
             } else {
                 Text(
-                    text = if (route.blobIds.size > 1) {
-                        "左右滑动切换 · 双击放大"
-                    } else {
-                        "双击放大或还原"
+                    // 视频页要换一套提示：那一页上双击放大并不存在，
+                    // 而"控制条会自己藏起来"是用户得预先知道的事 ——
+                    // 否则按钮一消失就会被当成"播放器坏了"。
+                    text = when {
+                        currentIsVideo && route.blobIds.size > 1 -> "左右滑动切换 · 轻点画面显示控制条"
+                        currentIsVideo -> "轻点画面显示控制条"
+                        route.blobIds.size > 1 -> "左右滑动切换 · 双击放大"
+                        else -> "双击放大或还原"
                     },
                     color = Color.White.copy(alpha = 0.65f),
                     style = MaterialTheme.typography.labelSmall,
@@ -263,6 +321,431 @@ fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 全屏播放一段视频。
+ *
+ * ## 生命周期：不是当前页就什么都不做
+ *
+ * [active] 为 false 时直接不进入组合 —— 连读取器都不开。理由是 `HorizontalPager`
+ * 在滑动期间会同时组合相邻的页，而每建一个播放器就占掉一个硬解码器；
+ * 连着滑过几段视频很容易把解码器耗光。而解码器不够时 `MediaPlayer` 是**静默失败**的，
+ * 表现成"来回滑了几次之后，有些视频怎么点都是黑屏" —— 极难归因。
+ *
+ * ## 为什么没有"首帧垫在黑屏下面"
+ *
+ * `SurfaceView` 的画面是**独立图层**，默认压在窗口底下。同一个 Box 里画在它之前的东西
+ * 会被窗口的不透明像素盖住（画了也看不见），能看见的只有画在它**之后**的东西。
+ * 所以这一页只做覆盖层：加载圈、控制条、中间那个播放键。
+ * 中间那几百毫秒用一个转圈交代掉就够了（打开读取器只读 24 字节文件头）。
+ *
+ * ## 比例从记录里拿，不是从播放器的尺寸回调拿
+ *
+ * 实况照片那条路**必须**等 `setOnVideoSizeChangedListener`：照片的宽高与影片的宽高不一样，
+ * 事先无从得知。视频这条路的处境正好相反 —— 宽高在入库时就探测好写进记录了
+ * （见 `VideoPipeline.probe`，并且已经按旋转角摆正），一开始就准确。
+ * 于是这里**故意不挂那个回调**：万一它给的是没摆正的帧尺寸（竖拍视频常见），
+ * 反而会把窗口摆错。Surface 从第一次布局起就是对的。
+ *
+ * ## 为什么用 prepareAsync
+ *
+ * 这条路径上每一字节都得**现场解密**。`prepare()` 会同步读完容器头部再等解码器就绪，
+ * 一段 4K 视频的头部解析足以让主线程掉帧；在真机上表现为"点开视频，界面先僵一下"。
+ */
+@Composable
+private fun VideoPage(
+    state: VaultAppState,
+    blobId: String,
+    kind: BlobKind,
+    active: Boolean,
+) {
+    if (!active) return
+
+    /** 播放窗口的比例。见上方"比例从记录里拿"。 */
+    val aspect = remember(blobId) {
+        kind.video?.let { MotionPlayback.aspectOf(it.width, it.height) } ?: 0f
+    }
+
+    val playback = remember(blobId) { VideoHolder() }
+
+    /** 读取器。**打开它本身就是"能不能播"的判定** —— 拿不到就没有播放器可建。 */
+    var reader by remember(blobId) { mutableStateOf<BlobReader?>(null) }
+    var failed by remember(blobId) { mutableStateOf(false) }
+
+    /** `prepare` 完成。在它之前既没有画面，也没有真实时长。 */
+    var ready by remember(blobId) { mutableStateOf(false) }
+    var playing by remember(blobId) { mutableStateOf(false) }
+    var durationMs by remember(blobId) { mutableStateOf(kind.video?.durationMs ?: 0L) }
+    var positionMs by remember(blobId) { mutableStateOf(0L) }
+    var controls by remember(blobId) { mutableStateOf(true) }
+    var scrubbing by remember(blobId) { mutableStateOf(false) }
+    var scrubFraction by remember(blobId) { mutableStateOf(0f) }
+
+    /**
+     * 开播。
+     *
+     * 只有"上一遍已经播完"才先定位回开头：`MediaPlayer` 在 PlaybackCompleted 状态下
+     * 调 `start()` 的行为在不同版本上并不一致（有的从头播、有的原地停），
+     * 显式 seek 一次最省心。
+     */
+    fun play() {
+        val player = playback.player ?: return
+        if (playback.completed) {
+            runCatching { player.seekTo(0) }
+            playback.completed = false
+            positionMs = 0L
+        }
+        playback.wantsPlay = true
+        if (runCatching { player.start() }.isSuccess) playing = true
+    }
+
+    fun pause() {
+        playback.wantsPlay = false
+        playback.player?.let { runCatching { it.pause() } }
+        playing = false
+    }
+
+    LaunchedEffect(blobId) {
+        val opened = state.openReader(blobId)
+        if (opened == null) failed = true else reader = opened
+    }
+
+    // 读取器与播放器同生共死，且**先关播放器再关读取器**：反过来的话，
+    // 播放器的解码线程可能正好读在一个已经关掉的读取器上。
+    DisposableEffect(reader) {
+        val opened = reader
+        onDispose {
+            playback.close()
+            opened?.let { runCatching { it.close() } }
+        }
+    }
+
+    // 位置轮询：只在"正在播、且没人在拖进度条"时跑。拖的时候必须停 ——
+    // 否则每 250ms 一次的回写会把用户刚拖到的位置拽回去，手感就成了"跟人抢"。
+    LaunchedEffect(blobId, playing, scrubbing) {
+        if (!playing || scrubbing) return@LaunchedEffect
+        while (true) {
+            val player = playback.player ?: break
+            positionMs = runCatching { player.currentPosition.toLong() }.getOrDefault(positionMs)
+            delay(POSITION_POLL_MS)
+        }
+    }
+
+    // 控制条自动隐藏：只在**正在播**的时候隐藏。暂停时留着 ——
+    // 那个播放键是用户唯一能继续的路，把它藏起来等于把播放器锁死。
+    LaunchedEffect(blobId, controls, playing, scrubbing) {
+        if (!controls || !playing || scrubbing) return@LaunchedEffect
+        delay(CONTROLS_TIMEOUT_MS)
+        controls = false
+    }
+
+    // 兜底：某台设备不发 Surface 尺寸回调时，也别让用户对着黑屏干等。
+    // 它**不会**违背用户按过的暂停（见 [VideoHolder.startIfReady]）。
+    LaunchedEffect(blobId) {
+        delay(START_GRACE_MS)
+        if (playback.startIfReady(force = true)) playing = true
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // 轻点画面显示/隐藏控制条。水平拖动**不**消费，交给外层 Pager 翻页 ——
+            // 与 ZoomableImage 同一个道理：点击类识别器只在"确实是点击"时才成立
+            // （列表里按钮与列表滚动一直是可以并存的）。
+            .pointerInput(blobId) {
+                detectTapGestures(onTap = { controls = !controls })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        val opened = reader
+        if (opened != null && !failed) {
+            AndroidView(
+                // Surface 的尺寸**就是**画面的目标尺寸，所以"不拉伸"是靠这个比例做出来的。
+                // 比例已知（见函数注释）：万一记录里没有，退回整屏，由下面的兜底超时照播。
+                modifier = if (aspect > 0f) Modifier.aspectRatio(aspect) else Modifier.fillMaxSize(),
+                factory = { context ->
+                    SurfaceView(context).apply {
+                        getHolder().addCallback(
+                            object : SurfaceHolder.Callback {
+                                override fun surfaceCreated(surfaceHolder: SurfaceHolder) {
+                                    val player = MediaPlayer()
+                                    val ok = runCatching {
+                                        player.setDataSource(BlobMediaSource(opened))
+                                        player.setSurface(surfaceHolder.surface)
+                                        // 比例已经对齐，这一句只是把默认值写明（对变形无贡献）。
+                                        player.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+                                        player.setOnPreparedListener {
+                                            playback.prepared = true
+                                            ready = true
+                                            if (it.duration > 0) durationMs = it.duration.toLong()
+                                            playback.applyPendingSeek()
+                                            if (playback.startIfReady()) playing = true
+                                        }
+                                        player.setOnCompletionListener {
+                                            playback.completed = true
+                                            playing = false
+                                            positionMs = durationMs
+                                            // 播完把控制条叫回来，否则想重播还得先点一下屏幕
+                                            controls = true
+                                        }
+                                        player.setOnErrorListener { _, _, _ ->
+                                            // 密文损坏、编码不认识都走这里。**如实说出来**，
+                                            // 而不是留一个永远转圈的黑屏。
+                                            runCatching { player.release() }
+                                            if (playback.player === player) playback.player = null
+                                            failed = true
+                                            true
+                                        }
+                                        player.prepareAsync()
+                                    }.isSuccess
+
+                                    if (ok) {
+                                        playback.player = player
+                                        // 换过播放器就重新计一遍：切后台再回来时 Surface 会重建，
+                                        // 旧标记留着会让视频再也不播。
+                                        playback.prepared = false
+                                        playback.started = false
+                                        playback.completed = false
+                                        playback.videoAspect = aspect
+                                        // 已经 prepared 过就不必等（重建场景下 prepare 可能已完成）
+                                        if (playback.startIfReady()) playing = true
+                                    } else {
+                                        runCatching { player.release() }
+                                        failed = true
+                                    }
+                                }
+
+                                override fun surfaceChanged(
+                                    surfaceHolder: SurfaceHolder,
+                                    format: Int,
+                                    width: Int,
+                                    height: Int,
+                                ) {
+                                    playback.surfaceWidth = width
+                                    playback.surfaceHeight = height
+                                    if (playback.startIfReady()) playing = true
+                                }
+
+                                override fun surfaceDestroyed(surfaceHolder: SurfaceHolder) {
+                                    playback.player?.let { runCatching { it.release() } }
+                                    playback.player = null
+                                    playback.prepared = false
+                                    playback.started = false
+                                    playback.completed = false
+                                    playing = false
+                                }
+                            },
+                        )
+                    }
+                },
+            )
+        }
+
+        when {
+            failed -> Text(
+                text = "这段视频读不出来，文件可能已经损坏",
+                color = Color.White.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+
+            !ready -> CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
+
+            !playing -> VideoPlayGlyph(diameter = 64.dp, onClick = { play() })
+        }
+
+        if (ready && controls) {
+            VideoControls(
+                playing = playing,
+                positionMs = positionMs,
+                durationMs = durationMs,
+                scrubbing = scrubbing,
+                scrubFraction = scrubFraction,
+                onTogglePlay = { if (playing) pause() else play() },
+                onScrub = { scrubbing = true; scrubFraction = it },
+                onSeek = {
+                    val target = if (durationMs > 0) (it * durationMs).toLong() else 0L
+                    // 落点必须清掉"已播完"标记，否则再点播放会先被打回 0。
+                    playback.completed = false
+                    val player = playback.player
+                    if (player != null) {
+                        runCatching { player.seekTo(target.toInt()) }
+                    } else {
+                        // 还没 prepare：seekTo 会被丢掉，先记下来（见 applyPendingSeek）
+                        playback.pendingSeekMs = target
+                    }
+                    positionMs = target
+                    scrubbing = false
+                },
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+    }
+}
+
+/**
+ * 视频播放器的持有者。
+ *
+ * 与 [PlayerHolder] 分开，是因为这里要多管一件事：**用户意图**。
+ * 实况照片那条路是"打开即播、没有控制条"，`startIfReady` 里没有任何意图要判断；
+ * 而视频这条路上，Surface 重建（切后台再回来、锁屏解锁）会重新走一遍 `surfaceCreated`，
+ * [wantsPlay] 就是"别把用户暂停过的视频又自动播起来"的那一个字段。
+ */
+private class VideoHolder {
+    var player: MediaPlayer? = null
+
+    /** `prepare` 完成。没完成时 `start()` 会抛 IllegalStateException。 */
+    var prepared = false
+
+    /** 已经启动过。同一个播放器只允许 `start()` 一次 —— 之后就由用户的控制条接管。 */
+    var started = false
+
+    /** 影片显示比例（宽 / 高）。0 表示"还不知道" —— 那时门禁恒不通过，靠兜底超时开播。 */
+    var videoAspect = 0f
+    var surfaceWidth = 0
+    var surfaceHeight = 0
+
+    /** 用户的意图：true = 该在播。 */
+    var wantsPlay = true
+
+    /** 已经播完（PlaybackCompleted）。用来决定"再点播放"要不要先回到开头。 */
+    var completed = false
+
+    /** 还没生效的定位（毫秒）；负数表示没有。`prepare` 之前 `seekTo` 是无效的。 */
+    var pendingSeekMs = -1L
+
+    /**
+     * 能不能开播：要**已经 prepare**、用户没按过暂停、还没启动过，
+     * 且（除非 [force]）Surface 的尺寸已经与影片比例对齐。
+     *
+     * 比例对齐这条门禁在视频这条路上的意义与实况不同：SurfaceView 从一开始就按记录的
+     * 比例摆好了，所以正常情况下这个条件在第一次回调时就成立。留着它是为了让
+     * "启动时机"这件事只有一处定义 —— 而不是因为这里也会遇上变形。[force] 是兜底：
+     * 某台设备不发尺寸回调时，到点就照播，宁可首帧略变形也不能让用户对着黑屏干等。
+     *
+     * @return 真的启动了才返回 true（调用方据此同步界面上的播放状态）。
+     */
+    fun startIfReady(force: Boolean = false): Boolean {
+        val player = player ?: return false
+        if (started || !prepared || !wantsPlay || completed) return false
+        if (!force && !MotionPlayback.surfaceMatchesVideo(surfaceWidth, surfaceHeight, videoAspect)) {
+            return false
+        }
+        started = runCatching { player.start() }.isSuccess
+        return started
+    }
+
+    fun applyPendingSeek() {
+        val player = player ?: return
+        val target = pendingSeekMs
+        if (target < 0) return
+        pendingSeekMs = -1
+        runCatching { player.seekTo(target.toInt()) }
+    }
+
+    /** 释放播放器与读取器。可重复调用。 */
+    fun close() {
+        player?.let {
+            runCatching { it.reset() }
+            runCatching { it.release() }
+        }
+        player = null
+        prepared = false
+        started = false
+        completed = false
+    }
+}
+
+/**
+ * 播放控制条：播放/暂停 + 进度 + 时间。
+ *
+ * ## 为什么时间是两个 Text，而不是一个 `0:12 / 1:05`
+ *
+ * 进度条要吃掉中间那一整行，而左侧的"当前时间"必须**跟着进度走** ——
+ * 拖动时显示拖到的位置，松手后显示播放位置。拆成左右两个标签，
+ * 中间的进度条才能用 `weight(1f)` 去占满剩余空间。
+ *
+ * ## 配色为什么全是写死的白/半透明白
+ *
+ * 这一页永远是黑底（全屏看片没有"浅色主题"这回事）。用 `MaterialTheme.colorScheme`
+ * 里那套会得到"浅色主题下深色滑轨压在黑色影片上"这种根本看不见的组合。
+ *
+ * ## 时长未知时不显示 `0:00`
+ *
+ * `0:00` 会被读成"这段视频是空的/坏了"，而真相只是容器里没写时长。
+ * 与网格角标同一条纪律（见 [com.fpb.vault.ui.components.VideoBadge]）。
+ */
+@Composable
+private fun VideoControls(
+    playing: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    scrubbing: Boolean,
+    scrubFraction: Float,
+    onTogglePlay: () -> Unit,
+    onScrub: (Float) -> Unit,
+    onSeek: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val known = durationMs > 0
+    val shownMs = if (scrubbing && known) (scrubFraction * durationMs).toLong() else positionMs
+    val fraction = when {
+        scrubbing -> scrubFraction
+        known -> (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+        else -> 0f
+    }
+
+    // 外层负责那层渐变，内层负责避让系统手势条 —— 这样渐变一直铺到屏幕底边，
+    // 而按钮不会被手势条压住（全屏看图这一页没有别的地方放 inset）。
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f)),
+                ),
+            ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onTogglePlay) {
+                Icon(
+                    imageVector = if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                    contentDescription = if (playing) "暂停" else "播放",
+                    tint = Color.White,
+                )
+            }
+            Text(
+                text = NotePayload.formatDuration(shownMs),
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Slider(
+                value = fraction,
+                onValueChange = onScrub,
+                onValueChangeFinished = { onSeek(fraction) },
+                enabled = known,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.3f),
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 10.dp),
+            )
+            Text(
+                text = if (known) NotePayload.formatDuration(durationMs) else "--:--",
+                color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
     }
 }
@@ -712,3 +1195,19 @@ private val TOP_SCRIM_HEIGHT = 96.dp
  * 它的存在只是为了"某台设备不发这个回调"时不会把影片永远卡在未开播状态。
  */
 private const val START_GRACE_MS = 700L
+
+/**
+ * 播放中刷新进度的时间间隔。
+ *
+ * 250ms 是"看起来是连续的"与"每 4 秒唤醒一次主线程"之间的折中：人眼对进度条的
+ * 抖动不敏感（尤其这一条只有几百像素宽），但每秒 4 次读系统时钟确实便宜。
+ */
+private const val POSITION_POLL_MS = 250L
+
+/**
+ * 控制条在播放中自动隐藏前的停留时间。
+ *
+ * 3.5 秒是播放器类的通例：够看清一次进度，又不至于长时间压着画面。
+ * **暂停时不隐藏**（见 [VideoPage] 里那个 effect）—— 那时候它是唯一的操作入口。
+ */
+private const val CONTROLS_TIMEOUT_MS = 3_500L

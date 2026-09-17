@@ -86,6 +86,16 @@ class BitmapCache(
 
         fun fullKey(blobId: String) = "f:$blobId"
 
+        /**
+         * 视频封面（首帧）。
+         *
+         * **与图片缩略图共用同一个 LRU**，而不是另起一个缓存。理由是同一个：
+         * [clear] 是唯一保证"锁定后内存里不留下任何由明文派生的东西"的地方，
+         * 每多一个缓存就多一次"忘了在锁定路径上清它"的机会。
+         * 前缀不同即可避免同一个 blobId 的两种形态互相覆盖。
+         */
+        fun videoThumbKey(blobId: String) = "v:$blobId"
+
         private fun defaultMaxBytes(): Int {
             val maxHeap = Runtime.getRuntime().maxMemory()
             val eighth = (maxHeap / 8).toInt()

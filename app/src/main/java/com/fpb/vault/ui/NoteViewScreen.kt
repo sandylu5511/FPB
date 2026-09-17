@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Visibility
@@ -60,8 +61,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.fpb.vault.model.NoteType
 import com.fpb.vault.model.VaultNote
+import com.fpb.vault.model.VideoRef
 import com.fpb.vault.ui.components.FpbTopBar
+import com.fpb.vault.ui.components.MotionBadge
 import com.fpb.vault.ui.components.SuccessGreen
+import com.fpb.vault.ui.components.VideoBadge
+import com.fpb.vault.ui.components.VideoPlayGlyph
 import com.fpb.vault.vault.MotionPhoto
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -208,7 +213,7 @@ fun NoteViewScreen(state: VaultAppState, route: Route.View) {
 private fun ViewBody(state: VaultAppState, note: VaultNote) {
     when (note.type) {
         NoteType.TEXT -> TextBody(note.payload.body)
-        NoteType.IMAGE -> ImageBody(state = state, note = note)
+        NoteType.IMAGE, NoteType.VIDEO -> MediaBody(state = state, note = note)
         NoteType.CHECKLIST -> ChecklistBody(note)
         NoteType.CREDENTIAL -> CredentialBody(note)
     }
@@ -226,58 +231,101 @@ private fun TextBody(body: String) {
     }
 }
 
-/** 图片正文：三列网格，点任意一张进全屏查看器。 */
+/**
+ * 媒体正文：图片与视频各来一组三列网格，点任意一格进全屏查看器。
+ *
+ * ## 为什么图与视频合成一个正文
+ *
+ * 因为**浏览器的语义是"一次看完整条记录里的所有东西"**，而全屏查看器那条序列
+ * 本来就是跨类型的（左右滑动能在照片和视频之间翻）。若分成两个正文，
+ * 点一张图进去只会看到图、点一个视频进去只能看到视频，
+ * "翻到下一格"的行为就与网格上看到的顺序对不上了。
+ *
+ * 两类媒体共用一条 blobId 序列（先图后视频，与网格的阅读顺序一致），
+ * 于是查看器里的页码与网格上数出来的位置一致。
+ */
 @Composable
-private fun ImageBody(state: VaultAppState, note: VaultNote) {
+private fun MediaBody(state: VaultAppState, note: VaultNote) {
     val images = note.payload.images
-    if (images.isEmpty()) {
+    val videos = note.payload.videos
+    if (images.isEmpty() && videos.isEmpty()) {
         Text(
-            text = "（没有图片${if (note.payload.body.isBlank()) "，也没有备注" else ""}）",
+            text = "（没有照片或视频${if (note.payload.body.isBlank()) "，也没有备注" else ""}）",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     } else {
-        val blobIds = images.map { it.blobId }
-        images.chunked(3).forEach { rowItems ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                rowItems.forEach { ref ->
-                    ViewThumbnail(
-                        state = state,
-                        blobId = ref.blobId,
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f),
-                        onClick = {
-                            state.push(Route.Viewer(blobIds, blobIds.indexOf(ref.blobId).coerceAtLeast(0)))
-                        },
-                    )
-                }
-                // 不足三张时补齐占位，避免最后一张被拉伸
-                repeat(3 - rowItems.size) {
-                    Spacer(Modifier.weight(1f))
-                }
+        val blobIds = images.map { it.blobId } + videos.map { it.blobId }
+        MediaGrid(
+            state = state,
+            blobIds = blobIds,
+            imageCount = images.size,
+            videos = videos,
+        )
+        TextBody(note.payload.body)
+    }
+}
+
+/**
+ * 三列网格。[blobIds] 的前 [imageCount] 个是图片，其后依次对应 [videos]。
+ *
+ * 这样切分而不是传两个格子列表，是因为"点开之后翻页的顺序"必须与网格上的顺序
+ * 逐格对齐 —— 分成两组各渲染一次的话，两处各自算一遍序号，迟早会有一处算错。
+ */
+@Composable
+private fun MediaGrid(
+    state: VaultAppState,
+    blobIds: List<String>,
+    imageCount: Int,
+    videos: List<VideoRef>,
+) {
+    blobIds.chunked(3).forEachIndexed { rowIndex, rowIds ->
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            rowIds.forEachIndexed { columnIndex, blobId ->
+                val position = rowIndex * 3 + columnIndex
+                val video = if (position >= imageCount) videos[position - imageCount] else null
+                ViewThumbnail(
+                    state = state,
+                    blobId = blobId,
+                    video = video,
+                    modifier = Modifier
+                        .weight(1f)
+                        .aspectRatio(1f),
+                    onClick = {
+                        state.push(Route.Viewer(blobIds, position.coerceAtLeast(0)))
+                    },
+                )
+            }
+            // 不足三张时补齐占位，避免最后一张被拉伸
+            repeat(3 - rowIds.size) {
+                Spacer(Modifier.weight(1f))
             }
         }
     }
-    TextBody(note.payload.body)
 }
 
+/** [video] 非空表示这一格是视频，封面与角标要走另一条路。 */
 @Composable
 private fun ViewThumbnail(
     state: VaultAppState,
     blobId: String,
     modifier: Modifier = Modifier,
+    video: VideoRef? = null,
     onClick: () -> Unit,
 ) {
     var bitmap by remember(blobId) { mutableStateOf<Bitmap?>(null) }
     var motion by remember(blobId) { mutableStateOf<MotionPhoto.Motion?>(null) }
-    LaunchedEffect(blobId) {
-        bitmap = state.thumbnail(blobId)
-        // 缩略图那一步已经在同一份字节上顺手算过了，这里是纯内存命中
-        motion = state.motionOf(blobId)
+    LaunchedEffect(blobId, video) {
+        if (video != null) {
+            bitmap = state.videoThumbnail(blobId, video.durationMs)
+        } else {
+            bitmap = state.thumbnail(blobId)
+            // 缩略图那一步已经在同一份字节上顺手算过了，这里是纯内存命中
+            motion = state.motionOf(blobId)
+        }
     }
 
     Box(
@@ -297,13 +345,22 @@ private fun ViewThumbnail(
             )
         } else {
             Icon(
-                imageVector = Icons.Outlined.Image,
+                imageVector = if (video != null) Icons.Outlined.Videocam else Icons.Outlined.Image,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(22.dp),
             )
         }
-        if (motion != null) {
+        if (video != null) {
+            // 封面还没解出来时先给个三角，否则那几秒里这一格看起来就是一张空白图
+            if (current == null) VideoPlayGlyph()
+            VideoBadge(
+                durationMs = video.durationMs,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp),
+            )
+        } else if (motion != null) {
             MotionBadge(
                 modifier = Modifier
                     .align(Alignment.BottomStart)

@@ -15,9 +15,13 @@ import com.fpb.vault.crypto.RecoveryCode
 import com.fpb.vault.crypto.UnlockOutcome
 import com.fpb.vault.crypto.VaultDek
 import com.fpb.vault.crypto.VaultKeyring
+import com.fpb.vault.data.BlobEmptyException
+import com.fpb.vault.data.BlobReader
+import com.fpb.vault.data.BlobTooLargeException
 import com.fpb.vault.model.NotePayload
 import com.fpb.vault.model.NoteType
 import com.fpb.vault.model.VaultNote
+import com.fpb.vault.model.VideoRef
 import com.fpb.vault.session.TagCount
 import com.fpb.vault.session.VaultSession
 import com.fpb.vault.vault.BackupInfo
@@ -33,6 +37,7 @@ import com.fpb.vault.vault.SettingsStore
 import com.fpb.vault.vault.ThemeMode
 import com.fpb.vault.vault.VaultRepository
 import com.fpb.vault.vault.VaultStoreException
+import com.fpb.vault.vault.VideoPipeline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -48,18 +53,50 @@ sealed interface Route {
     data class View(val noteId: String) : Route
     data class Viewer(val blobIds: List<String>, val startIndex: Int) : Route
 
-    /** 照片库：聚合全部图片记录的网格视图。诱饵库里不提供入口。 */
+    /** 媒体库：聚合全部照片与视频的网格视图。诱饵库里不提供入口。 */
     data object Photos : Route
     data object Settings : Route
 }
 
 /**
- * 一张照片在库里的坐标：属于哪条记录、是哪个 blob。
+ * 一份媒体文件（照片或视频）在库里的坐标：属于哪条记录、是哪个 blob。
  *
- * 照片库是一张**跨记录摊平**的网格，所以"删掉这一格"必须同时说清楚它在哪条记录里 ——
+ * 媒体库是一张**跨记录摊平**的网格，所以"删掉这一格"必须同时说清楚它在哪条记录里 ——
  * 只说 blobId 的话，删完之后不知道该更新哪条记录。
+ *
+ * 照片与视频共用这一个类型：删除的那套顺序纪律（先改可回滚的记录行与清单、
+ * 最后销毁不可再生的密文）对两者完全一样，分成两个类型只会变成两份迟早走样的实现。
  */
-data class PhotoRef(val noteId: String, val blobId: String)
+data class MediaRef(val noteId: String, val blobId: String)
+
+/**
+ * 一份附件在全屏查看器里该被当成什么。
+ *
+ * 全屏查看器只拿到一串 blobId（它是一条跨记录的媒体序列），必须能判断
+ * "这一页该当图看还是当视频放"。类型来自**记录内容**而不是文件本身 ——
+ * 这也正是它不该被猜的原因：一个整块格式的附件可能是图片，也可能是实况照片
+ * （尾部带 MP4），而分块格式的一定是视频。
+ *
+ * [video] 只对视频有值，并且它带的是**已经按旋转角摆正**的宽高（见 [VideoPipeline.probe]）。
+ * 播放窗口的比例必须用这里这份，不能用播放器回调给的原始帧尺寸：
+ * 手机竖拍的视频常常是 1920×1080 的帧 + 90° 旋转标记，拿原始帧尺寸去摆窗口，
+ * 画面就会横躺着被压扁。
+ */
+data class BlobKind(val type: NoteType, val video: VideoRef? = null)
+
+/**
+ * 一次视频导入的结局。
+ *
+ * 用密封类而不是 `VideoRef?`，是为了让**失败的原因能被如实说出来**：
+ * "这个视频有 2.4 GB，超过上限"和"这个文件不是视频"对用户是完全不同的两件事，
+ * 而它们都只表现为"没导进去"。
+ */
+sealed interface VideoImport {
+    class Ready(val video: VideoRef, val plainBytes: Long) : VideoImport
+
+    /** [message] 是可以直接显示给用户的一句话。 */
+    class Rejected(val message: String) : VideoImport
+}
 
 /**
  * 界面侧的唯一状态持有者。
@@ -506,80 +543,94 @@ class VaultAppState(private val context: Context) {
     }
 
     /**
-     * 照片库：把一张照片从它所属的记录里摘掉。
+     * 媒体库：把一张照片从它所属的记录里摘掉。
      *
-     * 只是 [removePhotos] 的单张形式 —— 判定与顺序都在那里，避免两处各自演化。
+     * 只是 [removeMedia] 的单张形式 —— 判定与顺序都在那里，避免两处各自演化。
      */
     fun removePhoto(noteId: String, blobId: String): Boolean =
-        removePhotos(listOf(PhotoRef(noteId, blobId))) > 0
+        removeMedia(listOf(MediaRef(noteId, blobId))) > 0
 
     /**
-     * 照片库：批量摘掉若干张照片（可能跨多条记录）。
+     * 媒体库：批量摘掉若干份媒体（可能跨多条记录，照片与视频混在一起）。
      *
      * ## 顺序
      *
      * 与 [VaultSession.delete] 同一条纪律：**先做可回滚的，最后做不可再生的**。
      * 记录行与清单在同一个事务里改（失败则整体回滚，什么都没变），
-     * 图片密文留到事务成功之后再单独销毁 —— 万一那一步失败，留下的也只是
-     * 能被 [purgeOrphanBlobs] 扫掉的孤儿文件，而不是"记录还在、照片打不开"。
+     * 密文留到事务成功之后再单独销毁 —— 万一那一步失败，留下的也只是
+     * 能被 [com.fpb.vault.session.VaultSession.purgeOrphanBlobs] 扫掉的孤儿文件，
+     * 而不是"记录还在、媒体打不开"。
      *
-     * ## 只剩照片的记录会被一并删掉
+     * ## 只剩媒体的记录会被一并删掉
      *
-     * 这是用户要的那条规则：照片全部删光的照片记录不该继续留在列表里，
+     * 这是用户要的那条规则：媒体全部删光的记录不该继续留在列表里，
      * 否则列表里会多出一张"点开什么都没有"的空卡片。
      * 判据收在 [PhotoRecord.isShell]：用户自己写过标题、备注、加过标签或收藏过的记录
-     * **不算空壳**，会被保留（照片删了、备注还在，它就不再只是装着照片的容器）。
+     * **不算空壳**，会被保留（媒体删了、备注还在，它就不再只是装着媒体的容器）。
      *
-     * 记录被判为空壳时直接走 [VaultSession.delete]：它会把这条记录名下的图片密文一并销毁，
-     * 而此刻它名下正好只剩下我们要删的那些（已无剩余图片），所以不必再单独删一遍。
+     * 记录被判为空壳时直接走 [VaultSession.delete]：它会把这条记录名下的密文一并销毁，
+     * 而此刻它名下正好只剩下我们要删的那些（已无剩余媒体），所以不必再单独删一遍。
      *
-     * @return 实际删掉的照片张数（记录不存在、或这些 blob 不属于该记录时不计）。
+     * ## 照片与视频必须一起摘
+     *
+     * 早先只摘 `images`。库里出现视频之后，如果这里不一起处理 `videos`，
+     * 删除会变成一件很诡异的事：网格上空了一格、记录还在列表里、
+     * 而那段视频的密文永远没人回收。
+     *
+     * @return 实际删掉的媒体份数（记录不存在、或这些 blob 不属于该记录时不计）。
      */
-    fun removePhotos(refs: List<PhotoRef>): Int {
+    fun removeMedia(refs: List<MediaRef>): Int {
         if (!session.isUnlocked || refs.isEmpty()) return 0
-        var removedPhotos = 0
+        var removedMedia = 0
         var deletedNotes = 0
 
         refs.groupBy { it.noteId }.forEach { (noteId, group) ->
             val note = runCatching { session.note(noteId) }.getOrNull() ?: return@forEach
             val payload = note.payload
             val drop = group.map { it.blobId }.toSet()
-            val remaining = payload.images.filterNot { it.blobId in drop }
-            val gone = payload.images.size - remaining.size
+            val remainingImages = payload.images.filterNot { it.blobId in drop }
+            val remainingVideos = payload.videos.filterNot { it.blobId in drop }
+            val gone = (payload.images.size - remainingImages.size) +
+                (payload.videos.size - remainingVideos.size)
             if (gone == 0) return@forEach
 
-            val shelled = PhotoRecord.isShell(payload.copy(images = remaining))
+            val shelled = PhotoRecord.isShell(
+                payload.copy(images = remainingImages, videos = remainingVideos),
+            )
             val ok = runCatching {
                 if (shelled) {
                     session.delete(noteId)
                 } else {
-                    session.update(noteId, payload.copy(images = remaining)) != null
+                    session.update(
+                        noteId,
+                        payload.copy(images = remainingImages, videos = remainingVideos),
+                    ) != null
                 }
             }.getOrElse { error ->
                 setMessage("删除失败：${error.message}")
                 false
             }
             if (!ok) return@forEach
-            removedPhotos += gone
+            removedMedia += gone
             if (shelled) {
                 deletedNotes++
             } else {
-                // 记录还在时才需要单独销毁图片密文；记录被删掉的话，
-                // session.delete 已经把它的图片一并销毁了。
+                // 记录还在时才需要单独销毁密文；记录被删掉的话，
+                // session.delete 已经把它的附件一并销毁了。
                 drop.forEach { runCatching { session.deleteImage(it) } }
             }
         }
 
         reload()
-        if (removedPhotos > 0) {
+        if (removedMedia > 0) {
             setMessage(
                 buildString {
-                    append("已删除 $removedPhotos 张照片")
-                    if (deletedNotes > 0) append("，$deletedNotes 条只剩照片的记录已一并删除")
+                    append("已删除 $removedMedia 项")
+                    if (deletedNotes > 0) append("，$deletedNotes 条只剩媒体的记录已一并删除")
                 },
             )
         }
-        return removedPhotos
+        return removedMedia
     }
 
     /** 列表页：一次删掉多条记录。逐条删、只刷新一次列表。 */
@@ -687,6 +738,107 @@ class VaultAppState(private val context: Context) {
         if (bitmapCache.motionKnown(blobId)) return
         bitmapCache.putMotion(blobId, runCatching { MotionPhoto.detect(bytes) }.getOrNull())
     }
+
+    // ==================== 视频 ====================
+
+    /**
+     * 把一段视频从相册导进库里：**流式加密落盘 → 探测元数据 → 成功则返回引用**。
+     *
+     * ## 为什么探测放在写入之后
+     *
+     * 入参是流（视频可能上 GB），流的顺序是单向的 —— 探测要用到文件里的多处内容
+     * （moov、关键帧），读完了没法回头。所以顺序是：先流式存下来拿到 blobId，
+     * 再用**随机访问读取器**去探。探测失败（不是视频、容器损坏）时把刚存的那份删掉，
+     * 于是"失败"不会在磁盘上留下任何痕迹 —— 否则反复试错会把用户的存储悄悄吃光。
+     *
+     * ## 为什么不用 try 捕获所有异常并统一报错
+     *
+     * "这个视频有 2.4 GB，超过上限"和"这个文件不是视频"对用户是完全不同的两件事，
+     * 而它们都表现为"没导进去"。所以这里把可预期的失败**翻译成人话**，
+     * 而不是让 `error.message` 里的英文异常名跑到界面上。
+     *
+     * [open] 由调用方提供（它才知道怎么从 content:// 拿流）。返回 null 表示取不到流。
+     */
+    suspend fun importVideo(open: () -> java.io.InputStream?): VideoImport = withContext(Dispatchers.IO) {
+        val stream = runCatching { open() }.getOrNull()
+            ?: return@withContext VideoImport.Rejected("这个视频取不到，换一个再试")
+
+        val stored = runCatching { session.putVideo(stream) }.getOrElse { error ->
+            return@withContext when (error) {
+                is BlobTooLargeException -> VideoImport.Rejected(
+                    "这个视频超过 ${error.limitBytes / (1024 * 1024 * 1024)} GB 的单条上限，" +
+                        "请先在系统相册里剪短一些再导入",
+                )
+                is BlobEmptyException -> VideoImport.Rejected("这个文件是空的，读不出内容")
+                else -> VideoImport.Rejected("视频保存失败：${error.message}")
+            }
+        }
+
+        // 探测必须能独立失败并触发回滚，所以它不套在上面的 runCatching 里。
+        val meta = runCatching { session.openBlob(stored.blobId)?.use(VideoPipeline::probe) }
+            .getOrNull()
+        if (meta == null) {
+            // 回滚：探测不出来的东西没有任何价值，留着只会变成孤儿。
+            runCatching { session.deleteImage(stored.blobId) }
+            return@withContext VideoImport.Rejected("这个文件不是能播放的视频，已跳过")
+        }
+
+        VideoImport.Ready(
+            video = VideoRef(
+                blobId = stored.blobId,
+                width = meta.width,
+                height = meta.height,
+                durationMs = meta.durationMs,
+            ),
+            plainBytes = stored.plainBytes,
+        )
+    }
+
+    /**
+     * 打开一份附件的随机访问读取器，交给播放器。
+     *
+     * 调用方**必须**负责 [BlobReader.close]。之所以不在这里用 `use { }` 包起来，
+     * 是因为读取器的生命周期与播放器一致（可能几分钟），而不是与这一次调用一致。
+     */
+    suspend fun openReader(blobId: String): BlobReader? = withContext(Dispatchers.IO) {
+        runCatching { session.openBlob(blobId) }.getOrNull()
+    }
+
+    /**
+     * 视频封面（首帧）。
+     *
+     * 与 [thumbnail] 分成两个方法，而不是在里面判一次类型：它们的**数据来源完全不同**
+     * （一个走 `BitmapFactory`，一个走 `MediaMetadataRetriever`），
+     * 而混在一起的那个分支会让"给视频调了图片缩略图"这种错误静默地返回 null。
+     *
+     * 封面解出来只进内存缓存，随 [lock] 一起消失 —— 与图片缩略图同一条纪律。
+     */
+    suspend fun videoThumbnail(blobId: String, durationMs: Long = 0L): Bitmap? {
+        bitmapCache.get(BitmapCache.videoThumbKey(blobId))?.let { return it }
+        return withContext(Dispatchers.IO) {
+            val reader = runCatching { session.openBlob(blobId) }.getOrNull()
+                ?: return@withContext null
+            val frame = reader.use { VideoPipeline.firstFrame(it, ImagePipeline.THUMBNAIL_EDGE, durationMs) }
+                ?: return@withContext null
+            bitmapCache.put(BitmapCache.videoThumbKey(blobId), frame)
+            frame
+        }
+    }
+
+    /**
+     * 当前库里每个附件的类型（视频另带摆正后的宽高）。
+     *
+     * 做成"一次遍历出一张表"而不是 [blobKinds] + 一张视频表：全屏查看器翻页时
+     * 每一页都要问一次，两张表就得查两次，而它们的数据源是同一份 [notes]。
+     */
+    fun blobKinds(): Map<String, BlobKind> = notes.asSequence()
+        .flatMap { note ->
+            sequence {
+                note.payload.images.forEach { yield(it.blobId to BlobKind(NoteType.IMAGE)) }
+                note.payload.videos.forEach { yield(it.blobId to BlobKind(NoteType.VIDEO, it)) }
+            }
+        }
+        .toMap()
 
     // ==================== 维护操作 ====================
 
@@ -968,7 +1120,9 @@ class VaultAppState(private val context: Context) {
             val stream = context.contentResolver.openOutputStream(uri, "wt")
                 ?: throw IllegalStateException("无法写入所选位置")
             stream.use { BackupManager.export(repository, session, it) }.let { summary ->
-                "已导出 ${summary.noteRows} 条记录、${summary.attachments} 张图片" +
+                // 口径是"附件"不是"图片"：库里可能存的是视频，
+                // 说成"0 张图片"会让人以为备份没把视频带上（这正是要防的那个误解）。
+                "已导出 ${summary.noteRows} 条记录、${summary.attachments} 个附件" +
                     "（${ImagePipeline.describeSize(summary.bytes)}）"
             }
         }.getOrElse { error -> "导出失败：${error.message}" }
@@ -997,7 +1151,7 @@ class VaultAppState(private val context: Context) {
                 val stream = context.contentResolver.openInputStream(uri)
                     ?: throw IllegalStateException("无法读取所选文件")
                 val info = stream.use { BackupManager.restore(repository, it) }
-                "恢复完成（${info.attachments} 张图片）。请用该备份对应的主密码解锁。"
+                "恢复完成（${info.attachments} 个附件）。请用该备份对应的主密码解锁。"
             }.getOrElse { error -> "恢复失败：${error.message}" }
         }
     }
