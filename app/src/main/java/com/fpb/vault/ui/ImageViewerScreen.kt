@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -64,7 +65,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.fpb.vault.vault.MotionPhoto
+import com.fpb.vault.vault.MotionPlayback
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
@@ -95,10 +98,18 @@ import kotlin.math.min
  * ## 实况照片
  *
  * 安卓相机拍的"实况照片"就是一张尾部接了段 MP4 的 JPEG。字节本来就完整地在库里
- * （见 [com.fpb.vault.vault.MotionPhoto]），所以这里只要在打开时认出它、并给一个播放入口。
+ * （见 [com.fpb.vault.vault.MotionPhoto]），所以这里只要在打开时认出它、并**自动**播起来。
  * 播放**不落任何临时文件**：影片段解密后直接以 [MediaDataSource] 喂给 [MediaPlayer]，
  * 明文只在内存里存在，播完即弃 —— 一个把"明文绝不落盘"当卖点的应用，
  * 不该为了让系统播放器方便就先写一个 mp4 到磁盘上。
+ *
+ * 两条都修过，各自对应一个用户一眼能看出的体验问题：
+ *
+ * - **打开即播**（原来是"要用户点一下『实况』胶囊才播"）。判据在
+ *   [com.fpb.vault.vault.MotionPlayback.shouldAutoPlay]：认得出是实况就自动播；
+ *   用户按过"停止"的那一张不再自动开播，翻页则重新判定。
+ * - **画面不拉伸**（原来是纵向拉开变形）。根因不在缩放模式，而在 Surface 的尺寸：
+ *   见 [PlayerHolder.startIfReady] 的长注释。
  */
 @Composable
 fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
@@ -120,13 +131,38 @@ fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
     var video by remember { mutableStateOf<ByteArray?>(null) }
     var loadingVideo by remember { mutableStateOf(false) }
 
-    // 翻到哪一张就判哪一张的形态。通常 ZoomableImage 那份大图已经把结果算好放进内存了
-    // （同一份字节，不会多解密一次）；万一还没轮到它，ensureMotion 会自己读一次。
+    /**
+     * 被用户按过"停止"的那个 blobId。
+     *
+     * "打开即播"是新行为，但它不能变成"用户关不掉"：在一张图上按过停止之后，
+     * 同一张图就不再自动开播（手动点"实况"仍然可以重播），翻到别的照片照常自动播。
+     */
+    var stoppedByUser by remember { mutableStateOf<String?>(null) }
+
+    // 翻到哪一张就判哪一张的形态，认出是实况就**直接播**。
+    // 通常 ZoomableImage 那份大图已经把结果算好放进内存了（同一份字节，不会多解密一次）；
+    // 万一还没轮到它，ensureMotion 会自己读一次。
     LaunchedEffect(currentBlobId) {
-        motion = currentBlobId?.let { state.ensureMotion(it) }
+        val id = currentBlobId
         // 换页即停止播放：影片属于上一张，跟着翻页留在屏幕上会让人以为这是新那张的实况。
+        motion = null
         video = null
         loadingVideo = false
+        if (id == null) return@LaunchedEffect
+
+        val detected = state.ensureMotion(id)
+        motion = detected
+        if (!MotionPlayback.shouldAutoPlay(detected, id, stoppedByUser)) return@LaunchedEffect
+
+        loadingVideo = true
+        val bytes = state.motionVideo(id)
+        loadingVideo = false
+        if (bytes == null) {
+            // 说明清楚"坏的是影片、照片没事"，否则用户会以为整张图废了
+            state.setMessage("这张实况的影片播不出来，照片本身是好的")
+        } else {
+            video = bytes
+        }
     }
 
     Box(
@@ -186,7 +222,14 @@ fun ImageViewerScreen(state: VaultAppState, route: Route.Viewer) {
                     style = MaterialTheme.typography.labelSmall,
                 )
                 Spacer(Modifier.width(10.dp))
-                ViewerPill(text = "停止", onClick = { video = null })
+                ViewerPill(
+                    text = "停止",
+                    onClick = {
+                        // 记下"用户在**这一张**上按过停止"，否则这一页会立刻又自动播起来。
+                        stoppedByUser = currentBlobId
+                        video = null
+                    },
+                )
             } else {
                 Text(
                     text = if (route.blobIds.size > 1) {
@@ -257,9 +300,51 @@ private fun ViewerPill(
     }
 }
 
-/** 播放器的持有者。用普通对象而不是 Compose 状态：换一个 MediaPlayer 不该引起重组。 */
+/**
+ * 播放器的持有者。用普通对象而不是 Compose 状态：换一个 MediaPlayer 不该引起重组。
+ *
+ * 它同时负责一件容易被忽略的事：**什么时候才允许开播**。见 [startIfReady]。
+ */
 private class PlayerHolder {
     var player: MediaPlayer? = null
+
+    /** 影片的显示比例（宽 / 高）。0 表示还不知道 —— 由播放器的尺寸回调给出。 */
+    var videoAspect = 0f
+
+    /** Surface 当前的像素尺寸，用来判断它有没有按影片比例摆好。 */
+    var surfaceWidth = 0
+    var surfaceHeight = 0
+
+    /** 已经 start() 过。同一个播放器只允许启动一次。 */
+    var started = false
+
+    /**
+     * Surface 的尺寸与影片比例对齐之后才开播。
+     *
+     * ## 为什么必须等（这里就是"实况会拉伸变形"的根因）
+     *
+     * 早先的版本把 `SurfaceView` 铺满整屏，只靠一句
+     * `setVideoScalingMode(VIDEO_SCALING_MODE_SCALE_TO_FIT)` 指望"按比例适应"。
+     * 实测**不生效**：把解码帧交给一个**自定义 `Surface`** 时，Surface 的尺寸就是画面的目标尺寸 ——
+     * 1080×2400 的整屏上放一段 1080×1920 的实况影片，画面被纵向拉长了 25%，看着就是"照片变形了"。
+     * 缩放模式只在播放器自己管显示的时候才有意义，这条路径上它管不着。
+     *
+     * 所以唯一可靠的做法是让 Surface 自己就是影片的比例：外层按
+     * [MotionPlayback.aspectOf] 算出的比例给 `SurfaceView` 定尺寸（见 [MotionPlayer]），
+     * 等它在 `surfaceChanged` 里真的变成那个尺寸，再开播。
+     *
+     * 为什么不"先播着、尺寸到了再改"：播放器一 `start()` 就立刻往 Surface 上画帧，
+     * 而新尺寸要到下一帧布局才生效 —— 不等的话开头那几帧依旧是变形的。
+     *
+     * [force] 是兜底：万一某台设备/某个实现根本不发尺寸回调，到点就照播，
+     * 宁可首帧略变形，也不能让用户对着黑屏干等。
+     */
+    fun startIfReady(force: Boolean = false) {
+        val player = player ?: return
+        if (started) return
+        if (!force && !MotionPlayback.surfaceMatchesVideo(surfaceWidth, surfaceHeight, videoAspect)) return
+        started = runCatching { player.start() }.isSuccess
+    }
 }
 
 /**
@@ -282,6 +367,12 @@ private fun MotionPlayer(
     // 局部变量会把成员遮蔽掉，`holder.addCallback(...)` 于是变成在 PlayerHolder 上找这个方法。
     val playback = remember { PlayerHolder() }
 
+    /**
+     * 影片的真实比例。拿到之前 `SurfaceView` 先按整屏摆 —— 此时一帧都还没画出来，看不到东西；
+     * 开播的时机由 [PlayerHolder.startIfReady] 把关。
+     */
+    var videoAspect by remember(bytes) { mutableStateOf(0f) }
+
     DisposableEffect(bytes) {
         onDispose {
             playback.player?.let { runCatching { it.reset() }; runCatching { it.release() } }
@@ -289,55 +380,80 @@ private fun MotionPlayer(
         }
     }
 
-    AndroidView(
-        modifier = modifier,
-        factory = { context ->
-            SurfaceView(context).apply {
-                getHolder().addCallback(
-                    object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(surfaceHolder: SurfaceHolder) {
-                            val player = MediaPlayer()
-                            val started = runCatching {
-                                player.setDataSource(BytesMediaSource(bytes))
-                                player.setSurface(surfaceHolder.surface)
-                                // 显式 FIT：默认行为取决于实现，而"这段影片被拉满全屏"
-                                // 与上面那张按原比例显示的静图对不上，看着像播错了内容。
-                                player.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
-                                player.isLooping = false
-                                player.setOnCompletionListener { finish() }
-                                player.setOnErrorListener { _, _, _ ->
-                                    // 影片段坏了（例如元数据指错了位置）不该把界面卡在播放态
+    // 兜底：万一设备不发影片尺寸回调，也不能让用户对着黑屏干等。
+    LaunchedEffect(bytes) {
+        delay(START_GRACE_MS)
+        playback.startIfReady(force = true)
+    }
+
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        AndroidView(
+            // Surface 的尺寸**就是**画面的目标尺寸，所以"不拉伸"是靠这个比例做出来的：
+            // 让 SurfaceView 自己就是影片的比例，播放器往上贴帧时就没有可拉伸的余地。
+            modifier = if (videoAspect > 0f) {
+                Modifier.aspectRatio(videoAspect)
+            } else {
+                Modifier.fillMaxSize()
+            },
+            factory = { context ->
+                SurfaceView(context).apply {
+                    getHolder().addCallback(
+                        object : SurfaceHolder.Callback {
+                            override fun surfaceCreated(surfaceHolder: SurfaceHolder) {
+                                val player = MediaPlayer()
+                                val ready = runCatching {
+                                    player.setDataSource(BytesMediaSource(bytes))
+                                    player.setSurface(surfaceHolder.surface)
+                                    // 比例已经对齐，这一句只是把默认值写明；真正消除拉伸的是外层那个比例。
+                                    player.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+                                    player.setOnVideoSizeChangedListener { _, width, height ->
+                                        val aspect = MotionPlayback.aspectOf(width, height)
+                                        playback.videoAspect = aspect
+                                        videoAspect = aspect
+                                    }
+                                    player.isLooping = false
+                                    player.setOnCompletionListener { finish() }
+                                    player.setOnErrorListener { _, _, _ ->
+                                        // 影片段坏了（例如元数据指错了位置）不该把界面卡在播放态
+                                        finish()
+                                        true
+                                    }
+                                    player.prepare()
+                                }.isSuccess
+
+                                if (ready) {
+                                    playback.player = player
+                                    // 换过播放器就重新计一次"启动与否"：切后台再回来时 Surface 会重建，
+                                    // 旧标记留着会让影片再也不播。
+                                    playback.started = false
+                                } else {
+                                    runCatching { player.release() }
                                     finish()
-                                    true
                                 }
-                                player.prepare()
-                                player.start()
-                            }.isSuccess
-
-                            if (started) {
-                                playback.player = player
-                            } else {
-                                runCatching { player.release() }
-                                finish()
                             }
-                        }
 
-                        override fun surfaceChanged(
-                            surfaceHolder: SurfaceHolder,
-                            format: Int,
-                            width: Int,
-                            height: Int,
-                        ) = Unit
+                            override fun surfaceChanged(
+                                surfaceHolder: SurfaceHolder,
+                                format: Int,
+                                width: Int,
+                                height: Int,
+                            ) {
+                                playback.surfaceWidth = width
+                                playback.surfaceHeight = height
+                                playback.startIfReady()
+                            }
 
-                        override fun surfaceDestroyed(surfaceHolder: SurfaceHolder) {
-                            playback.player?.let { runCatching { it.release() } }
-                            playback.player = null
-                        }
-                    },
-                )
-            }
-        },
-    )
+                            override fun surfaceDestroyed(surfaceHolder: SurfaceHolder) {
+                                playback.player?.let { runCatching { it.release() } }
+                                playback.player = null
+                                playback.started = false
+                            }
+                        },
+                    )
+                }
+            },
+        )
+    }
 }
 
 /**
@@ -588,3 +704,11 @@ private const val MAX_SCALE = 8f
 
 /** 顶栏底下那层黑色渐变的高度。够盖住状态栏 + 顶栏那一行即可。 */
 private val TOP_SCRIM_HEIGHT = 96.dp
+
+/**
+ * 等影片尺寸回调的宽限时间。
+ *
+ * 正常情况下 `prepare()` 期间就会给出尺寸，这个兜底永远不会触发；
+ * 它的存在只是为了"某台设备不发这个回调"时不会把影片永远卡在未开播状态。
+ */
+private const val START_GRACE_MS = 700L

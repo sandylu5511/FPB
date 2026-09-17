@@ -76,6 +76,11 @@ Java 单次派生 32 字节，预热后取 3 次平均：
 | `walkthrough-v105.py` / `-part2.py` | 深色模式可读性；大图左右滑动 |
 | `walkthrough-v106.py` | 外观模式三档（16 项断言）：浅色/深色/跟随系统、持久化、显式设置优先于系统 |
 | `walkthrough-v106-part2.py` | 大图按原图比例 + 双击「适应屏幕 ↔ 实际大小」（10 项断言） |
+| `upgrade-v107.py` | v1.0.6 → v1.0.7 覆盖升级保留数据（含私有文件指纹比对） |
+| `v108-acceptance.py` | v1.0.8 debug 包验收（22 项）：实况标识与播放、空壳回收、批量删除 |
+| `v108-release-acceptance.py` | v1.0.8 release 包验收（28 项）：含 `FLAG_SECURE` 正反对照 |
+| `walkthrough-v109-motion.py` | v1.0.9 **A/B 对照轮**：同设备、同素材、同量代码，A = 缺陷版 / B = 修复版；量影片条带高度与中央正方形比例 |
+| `v109-release-acceptance.py` | v1.0.9 release 包验收（19 项）：版本与签名、默认禁截屏、覆盖升级不丢数据、release 上打开即播 |
 
 跑法（两个部分要**连跑**：第 1 部分会 `pm clear` 并走完引导，第 2 部分才有干净的库可导入）：
 
@@ -87,6 +92,36 @@ PY=/c/Users/fa_12/.workbuddy/binaries/python/envs/default/Scripts/python.exe
 ```
 
 （`default` 这个 venv 里有 PIL —— 截图量像素要靠它。用系统 Python 会缺 Pillow。）
+
+### `tools/motion/` —— 造实测素材 + 验判据本身
+
+这一组是 v1.0.9 为"证明画面不再变形"建的工具链，**顺序不能颠倒：先造素材 → 再验判据 → 最后才跑走查**。
+
+| 脚本 | 用途 |
+|---|---|
+| `make_motion_photo.py` | 合成真·实况照片（JPEG 尾部接 MP4，靠 XMP 声明；`Item:Length` 含 XMP 自身长度，用**不动点迭代**算准，差 1 字节系统就不认） |
+| `make_probe_assets.py` | 合成"带几何形状"的测试素材：1080×2400 底图 + 320×180 影片（红底 + **中央 60×60 正方形** + 顶部横向移动白块），并落一帧 `probe-preview.png` 供自测 |
+| `selftest_measure.py` | **判据自测**：用手工合成的"正确 / 被拉伸 / 静止图 / 被拉伸且系统手势条在场"四张图，验证同一份量代码**会失败** |
+| `diagnose.py` | 诊断：从密文尺寸反推明文尺寸（`seal` 输出 = 12 B nonce + 明文 + 16 B GCM tag） |
+
+```bash
+PY=/c/Users/fa_12/.workbuddy/binaries/python/envs/default/Scripts/python.exe  # 需要 PIL + PyAV(av 18.1.0)
+
+"$PY" tools/motion/make_probe_assets.py    # 1) 造素材（含预览帧，必须是它产出的，别手工维护）
+"$PY" tools/motion/selftest_measure.py     # 2) 验判据本身可信
+"$PY" tools/walkthrough-v109-motion.py     # 3) 才跑 A/B 走查
+```
+
+**为什么中间那步不能省**：影片源 320×180（16:9）铺进 1080 宽应得 **607.5 px** 高，
+被拉伸成整屏（1080×2400）则是 **2120 px**；影片正中央那个正方形的渲染高宽比，
+正确 **1.000**、被拉伸 **0.255** —— 两个期望值差 4 倍，判据不可能同时通过。
+判据自己先能证伪自己，跑出来的数字才有资格当结论。
+
+**两条素材设计约束**（踩过才知道）：
+
+- **不要画横贯全宽的分隔线** —— 会让"白像素包围盒"等于整幅宽度，几何判据当场失效。
+- **预览帧必须由素材脚本一起生成**。曾手工放成常量文件，素材改版后自测仍读**陈旧基准**，
+  量出正方形比例 5.268 这种荒唐数字。
 
 ### 三条与"模拟器状态"有关的经验，别再从零踩一遍
 

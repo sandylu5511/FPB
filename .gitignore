@@ -12,26 +12,15 @@ local.properties
 *.jks
 *.keystore
 !debug.keystore
+*.apk
+
+# Kotlin 构建产物（2.x 起独立于 .gradle/，不排会被 git add -A 带进去）
+.kotlin/
+
+# Python 工具脚本的字节码缓存（tools/ 与 tools/motion/ 下都会生成）
+__pycache__/
 
 # 重构前的源码快照（本地回滚用，含 M2 版本全文）
 /backup/
 
-# ---- 发布签名凭据：整个目录都不入库 ----
-#
-# 不能只排除 keystore.properties。keys/ 里还有 README-签名说明.md，
-# 那份文档把口令**以明文写在正文和示例命令里**（第 12/13/58/72 行共 4 处）。
-# 本仓库的远端是 public 仓库，推上去等于把正式包的签名口令公开 ——
-# 拿到口令 + .jks 就能签出一个"能覆盖安装真包"的假包。所以整目录拦掉。
-#
-# 代价：签名说明文档也不随仓分发，克隆者看不到签名流程。
-# 对应地，README.md 里只描述"凭据在本地 keys/ 目录、刻意不入库"这一事实，
-# 不复制任何口令。备份要求见 keys/README-签名说明.md（本地）。
 /keys/
-
-# ---- 构建产物 ----
-.kotlin/
-*.apk
-
-# 说明：dist/ 下的历史 APK 共 154.6 MB，是构建产物而非源码，刻意不入库。
-# 需要分发时走 GitHub Releases 附件，而不是往 git 历史里塞二进制。
-# 例外：dist/*.md（发布说明）与 dist/evidence/ 截图要入库 —— 它们是验收证据链。

@@ -1,13 +1,39 @@
 # HANDOFF —— MixiaVault（仓库 `sandylu5511/FPB`）
 
-> 交接基线：**v1.0.8（versionCode 9）**，2026-09-16
-> 本文件记录"接手的人需要知道什么"。逐版发布细节见 `dist/FPB-v1.0.8-发布说明.md`。
+> 交接基线：**v1.0.9（versionCode 10）**，2026-09-16
+> 本文件记录"接手的人需要知道什么"。逐版发布细节见 `dist/FPB-v1.0.9-发布说明.md`。
 
 ---
 
 ## 一、当前任务
 
-### 本轮（v1.0.8）的核心目标
+### 最近一轮（v1.0.9）的核心目标 —— 实况照片的播放体验
+
+修用户实测提出的 **2 条体验缺陷**：
+
+| # | 用户原话 | 实质 |
+|---|---|---|
+| ① | 实况的照片播放起来会拉伸，导致照片变形 | 把解码帧交给**自定义 `Surface`** 时，Surface 的尺寸**就是**画面目标尺寸，`setVideoScalingMode(SCALE_TO_FIT)` 在这条路径上**不生效** |
+| ② | 实况不是自动在大图播放，需要点击实况后另外播放，用户体感不好 | 大图页没有"打开即播"，实况要手动点胶囊 |
+
+**修法**：`Modifier.aspectRatio(videoAspect)` 按影片比例给 `SurfaceView` 定尺寸；并在 `surfaceChanged` 报出**匹配尺寸之后**才 `start()`（`START_GRACE_MS = 700`）；大图页"打开即播"。
+
+**判据（把"看起来变形"变成可断言的两个数）**：
+
+| 量 | 期望（源 320×180，铺进 1080 宽） | 缺陷版实测 | 修复版实测 |
+|---|---|---|---|
+| 影片条带高度 | **607.5 px** | **2120 px**（铺满整屏） | **608 px** ✅ |
+| 条带内中央 60×60 正方形的渲染高宽比 | **1.000** | **0.255**（纵向拉约 4 倍） | **1.000** ✅ |
+
+**A/B 对照轮**（同一台设备、同一份素材、同一份量代码，只有 APK 不同）：
+
+| 观察项 | A = `dist/FPB-v1.0.8.apk`（缺陷版） | B = v1.0.9 |
+|---|---|---|
+| 打开大图是否自动播 | **3 次尝试共 36 帧，0 帧**出现影片条带（顶栏有「实况」胶囊，要手动点） | **12 帧里 6 帧**出现条带，全程未点任何东西 |
+| 条带几何 | `x[0,1079] y[280,2399]` = **1080×2120** | `x[0,1079] y[896,1503]` = **1080×608** |
+| 正方形 | 204×799 → 比例 **0.255** | 204×204 → 比例 **1.000** |
+
+### 上一轮（v1.0.8）的核心目标
 
 修复用户实测提出的 **4 条缺陷**：
 
@@ -46,15 +72,29 @@
 
 | 交付物 | 路径 | 状态 |
 |---|---|---|
-| 正式签名包 | `dist/FPB-v1.0.8.apk` | ✅ 3,290,205 B，versionCode 9 / versionName 1.0.8 |
-| APK SHA-256 | — | `9d45aa07…1a721f6a` |
-| 签名 | — | v2 + v3 通过，v1 关闭；证书 SHA-256 `7fe41590…acacbd`（与 v1.0.6 / v1.0.7 逐字符一致） |
-| 发布说明 | `dist/FPB-v1.0.8-发布说明.md` | ✅ |
+| 正式签名包（当前） | `dist/FPB-v1.0.9.apk` | ✅ 3,290,205 B，versionCode 10 / versionName 1.0.9 |
+| APK SHA-256 | — | `f498ef23…b77367f4` |
+| 签名 | — | v2 + v3 通过，v1 关闭；证书 SHA-256 `7fe41590…acacbd`（与 v1.0.6 起逐字符一致） |
+| 发布说明（当前） | `dist/FPB-v1.0.9-发布说明.md` | ✅ |
+| 上一版正式包 | `dist/FPB-v1.0.8.apk` | ✅ 同尺寸 3,290,205 B，SHA-256 `9d45aa07…1a721f6a`（用作 A/B 对照的 A 端） |
 | debug 包 | `app/build/outputs/apk/debug/` | ✅（本地构建产物，不入库） |
-| 验收脚本 | `tools/v108-acceptance.py`、`tools/v108-release-acceptance.py` | ✅ 可重跑 |
-| 验收证据 | `dist/evidence/v108/`、`dist/evidence/v108-release/` | ✅ 共 237 张 PNG |
+| 走查 / 验收脚本 | `tools/walkthrough-v109-motion.py`、`tools/v109-release-acceptance.py` | ✅ 可重跑 |
+| 判据自测 | `tools/motion/selftest_measure.py` | ✅ 4 组场景（见 §八） |
+| 验收证据 | `dist/evidence/v109-motion/`（A/B 走查）、`dist/evidence/v109-release/`（正式包） | ✅ |
+
+> ⚠️ **v1.0.8 与 v1.0.9 的 APK 字节数**完全相同**（3,290,205 B），但内容不同。**不要用文件大小判断"包有没有换"**，用 SHA-256 或 `aapt2 dump badging` 看 versionCode。
 
 ### 里程碑
+
+**v1.0.9**
+
+- **①② 全部实现**，且**缺陷先在 A 端复现**再证明 B 端修好（见 §一对照表）。
+- **单元测试 216 → 229 项，0 失败**（新增 `MotionPlaybackTest` 13 项）。
+- **release 包验收 19/19 通过**（`tools/v109-release-acceptance.py`）。**release 必须单独验**，理由见 §四.4。
+- 顺带把「跑一次走查看截图觉得没问题」升级为**可断言的两个像素数字**（条带高、正方形比）。
+- `.gitignore` 补回 `.kotlin/`（2.x 起 Kotlin 构建产物独立于 `.gradle/`，不排会被 `git add -A` 带进仓库）。
+
+**v1.0.8**
 
 - **①②③④ 全部实现。**
 - **单元测试 181 → 216 项，0 失败**（新增 `MotionPhotoTest` 14 项、`PhotoRecordTest` 21 项）。
@@ -67,10 +107,16 @@
 
 | 判据 | 证据 |
 |---|---|
-| 需求① 老照片免迁移即有标识 | 图库出现「实况」角标，**而这张照片是 v1.0.7 导入的、标题是旧版本"落盘"的** |
-| 需求① 真的能播 | logcat：`NuPlayerDriver created` → `MediaCodec [c2.goldfish.h264.decoder]` → `MediaPlayerNative: info/warning (3, 0)`（`MEDIA_INFO_VIDEO_RENDERING_START`） |
-| 需求② 老记录也回收 | 照片删光后主页变「本机加密 · 0 条」，那条 `照片 · 9月16日 06:27` 一并消失 |
-| 需求③④ 批量删除 | 长按进多选 → 全选（图库 1/1、列表 3/3）→ 确认框 → 批量删除；**附件目录同时变空**（不只界面少一行） |
+| **v1.0.9** 播放不再变形 | 条带高度 **1080×608**（16:9 应得 607.5）；条带内 60×60 正方形渲染 204×204 → 比例 **1.000**（源比 1.000） |
+| **v1.0.9** 打开即播 | 点开大图后 **未点任何东西**，12 帧连拍里 **6 帧**出现影片条带（logcat `MEDIA_INFO_VIDEO_RENDERING_START` 同期） |
+| **v1.0.9** 缺陷确实存在过（对照） | A 端 `dist/FPB-v1.0.8.apk`：3 次尝试 36 帧 **0 帧**有条带；手动点「实况」后条带 **1080×2120**、正方形比例 **0.255** |
+| **v1.0.9** 判据本身可信 | `tools/motion/selftest_measure.py` 用同一个量代码量 4 张手工合成的图，正确/被拉伸两组期望值差 4 倍，**判据不可能同时通过** |
+| **v1.0.9** 正式包也已修复 | release 包上自动播 **7/12 帧** + 条带 **1080×608** + 比例 **1.000**（5,000 B 级证据见 `dist/evidence/v109-release/`） |
+| **v1.0.9** 覆盖升级不丢数据 | `install -r` 后照片仍在、仍识别为实况、偏好保留（亮度 236.75/255） |
+| **v1.0.8** 老照片免迁移即有标识 | 图库出现「实况」角标，**而这张照片是 v1.0.7 导入的、标题是旧版本"落盘"的** |
+| **v1.0.8** 真的能播 | logcat：`NuPlayerDriver created` → `MediaCodec [c2.goldfish.h264.decoder]` → `MediaPlayerNative: info/warning (3, 0)`（`MEDIA_INFO_VIDEO_RENDERING_START`） |
+| **v1.0.8** 老记录也回收 | 照片删光后主页变「本机加密 · 0 条」，那条 `照片 · 9月16日 06:27` 一并消失 |
+| **v1.0.8** 批量删除 | 长按进多选 → 全选（图库 1/1、列表 3/3）→ 确认框 → 批量删除；**附件目录同时变空**（不只界面少一行） |
 | release 包默认禁止截屏 | 窗口带 `SECURE`，整屏亮像素 **0.00%**；关掉后 **99.52%**（正反对照） |
 
 ---
@@ -105,6 +151,19 @@
 ---
 
 ## 四、关键决策及原因
+
+### 0.（v1.0.9）拉伸变形的根因：**Surface 尺寸 = 画面尺寸**，不是缩放模式没设
+
+- 直觉会去查 `setVideoScalingMode`。查了，也是这么设的，但**没用**。
+- 真正原因：把解码帧交给**自定义 `Surface`** 时，输出画面**按该 Surface 的尺寸**渲染 —— 也就是说 **Surface 多大，画面就被拉成多大**，`SCALE_TO_FIT` 在这条路径上**根本不参与**。
+- 正确修法是**按影片比例定 Surface 尺寸**，而不是让 Surface 去适应画面：`Modifier.aspectRatio(videoAspect)`。
+- 配套一条硬约束：**`start()` 必须等 `surfaceChanged` 报出匹配尺寸之后**。提前 `start()`，播放器会按旧（不匹配）尺寸开画 —— 表现就是"偶发变形"。`START_GRACE_MS = 700` 是这条等待的上限。
+- 三个判据抽成**纯函数**（`MotionPlayback.kt`），因此可以在 JVM 里单测：`shouldAutoPlay(motion, blobId, stoppedByUser)` / `aspectOf(width, height)` / `surfaceMatchesVideo(surfaceWidth, surfaceHeight, videoAspect)`，容差 `ASPECT_TOLERANCE = 0.02f`。
+
+### 0.1（v1.0.9）"打开即播"要能被**用户偏好**打断
+
+- `shouldAutoPlay` 显式带 `stoppedByUser`：用户手动暂停过就**不再自动播**。否则每次回到大图页都强行播一遍，比"要手动点"更烦。
+- 纯函数形态让这条规则可单测，不必依赖 UI 走查。
 
 ### 1. 实况照片做到「标识 + 可播放」，而不是"真正保留实况语义"
 
@@ -164,6 +223,7 @@
 |---|---|
 | `app/src/main/java/com/fpb/vault/vault/MotionPhoto.kt` | 实况照片识别。纯字节函数，三条判据，可 JVM 单测 |
 | `app/src/main/java/com/fpb/vault/vault/PhotoRecord.kt` | 派生自动标题 + 空壳判定（`isShell` / `isAutoGeneratedTitle`） |
+| `app/src/main/java/com/fpb/vault/vault/MotionPlayback.kt` | **v1.0.9** 播放判据三纯函数：`shouldAutoPlay` / `aspectOf` / `surfaceMatchesVideo`，容差 `ASPECT_TOLERANCE = 0.02f` |
 
 ### 新增（测试）
 
@@ -171,6 +231,7 @@
 |---|---|---|
 | `app/src/test/java/com/fpb/vault/vault/MotionPhotoTest.kt` | 14 | 新/老格式、单引号属性、三星写法、6 类必须判 null、越界 |
 | `app/src/test/java/com/fpb/vault/vault/PhotoRecordTest.kt` | 21 | 空壳判定的每条分支 + **认领两个已出货版本的真实标题原文** |
+| `app/src/test/java/com/fpb/vault/vault/MotionPlaybackTest.kt` | 13 | **v1.0.9** 自动播四种情形（含 `stoppedByUser`）、比例换算、Surface 匹配与容差边界 |
 
 ### 修改（生产代码）
 
@@ -181,22 +242,27 @@
 | `ui/VaultAppState.kt` | 加 `PhotoRef`；`removePhoto` 改薄封装；新增 `removePhotos`（批量、含空壳回收）、`deleteNotes`（批量删记录）、`motionOf` / `ensureMotion` / `motionVideo`；`updateNote` 保存后也做空壳回收 |
 | `ui/HomeScreen.kt` | 列表页多选（长按进选、全选、确认框）；`displayTitle()` 改为派生标题 |
 | `ui/PhotoLibraryScreen.kt` | **重写**：多选删除、实况角标、导入时 `title = ""` |
-| `ui/ImageViewerScreen.kt` | 实况播放入口（三态顶栏）、`BytesMediaSource`、顶栏渐变遮罩、`SCALE_TO_FIT` |
+| `ui/ImageViewerScreen.kt` | 实况播放入口（三态顶栏）、`BytesMediaSource`、顶栏渐变遮罩、`SCALE_TO_FIT`；**v1.0.9**：打开即播、`Modifier.aspectRatio(videoAspect)`、`PlayerHolder.startIfReady(force)`、等 `surfaceChanged` 匹配后再 `start()`（`START_GRACE_MS = 700L`） |
 | `ui/NoteViewScreen.kt` | 详情页缩略图加实况角标 |
 | `ui/components/Common.kt` | `FpbTopBar` 加 `backIcon` / `backDescription` 参数 |
 | `app/proguard-rules.pro` | 补 `MediaDataSource` 子类的 keep 规则 |
-| `app/build.gradle.kts` | versionCode 8→9，versionName 1.0.7→1.0.8 |
-| `.gitignore` | `/keys/` 整目录、`.kotlin/`、`*.apk` 排除 |
+| `app/build.gradle.kts` | versionCode 8→9、1.0.7→1.0.8；**v1.0.9** 再 9→10、1.0.8→1.0.9 |
+| `.gitignore` | `/keys/` 整目录、`.kotlin/`、`*.apk` 排除（**v1.0.9 把 `.kotlin/` 补回**） |
 
 ### 新增（工具 / 证据）
 
 | 文件 | 用途 |
 |---|---|
 | `tools/motion/make_motion_photo.py` | 合成真·实况照片（含 `Item:Length` 的不动点迭代） |
+| `tools/motion/make_probe_assets.py` | **v1.0.9** 合成"带几何形状"的测试素材：1080×2400 底图 + 320×180 影片（红底 + 中央 60×60 白方框 + 顶部移动白块），并落一帧 `probe-preview.png` |
+| `tools/motion/selftest_measure.py` | **v1.0.9** 判据自测：4 组手工合成图，验证量代码不可能同时得逞 |
 | `tools/motion/diagnose.py` | 诊断脚本：密文尺寸反推明文尺寸 |
+| `tools/walkthrough-v109-motion.py` | **v1.0.9** A/B 走查（`band_of` / `square_of` / `enter_and_burst`） |
+| `tools/v109-release-acceptance.py` | **v1.0.9** release 包验收（19 项） |
 | `tools/v108-acceptance.py` | debug 包验收（22 项） |
 | `tools/v108-release-acceptance.py` | release 包验收（28 项） |
-| `dist/FPB-v1.0.8-发布说明.md` | 发布说明 |
+| `dist/FPB-v1.0.9-发布说明.md` | 发布说明（当前） |
+| `dist/FPB-v1.0.8-发布说明.md` | 发布说明（上一版） |
 
 ---
 
@@ -241,7 +307,7 @@
 2. **P1 · 轮换已暴露的 GitHub PAT**（有效期至 2026-10-16）。
 3. **P2 · 统一签名密钥叙事**：在 README 或专门的说明里写清"哪个是现用密钥、哪个是历史密钥"，并补齐 `fpb-release.jks` 的证书指纹与主体信息。
 4. **P2 · 恢复 lint 门禁**：装 JDK 21 或升级 AGP，然后删掉 `checkReleaseBuilds = false`。
-5. **P2 · 接 CI**：至少 `:app:testDebugUnitTest`；有设备时补 `v108-release-acceptance.py`。
+5. **P2 · 接 CI**：至少 `:app:testDebugUnitTest`；有设备时补 `v109-release-acceptance.py`（当前版本）与 `v108-release-acceptance.py`（回归）。
 6. **P3 · 用 GitHub Releases 分发 APK**，把 `dist/*.apk` 从本机搬到 Release 附件。
 7. **P3 · 若要做苹果实况照片**：需要选图器允许多选 `.MOV` 并与 `.HEIC` 配对，涉及权限与配对规则的重新设计。
 8. **回归提醒**：`PhotoRecord` 的标题格式（`M月d日 HH:mm`、`Locale.CHINA`、小时零填充）与旧记录认领强耦合，**任何格式变更都必须同步更新 `PhotoRecordTest` 里的真实标题基准**。
@@ -275,7 +341,14 @@
 | 播放态轮询永远抓不到 | 影片只有 3,543 B、约 1.2 秒，而一次 `uiautomator dump` 就要 ~1 秒，采样周期比被测窗口还长 | 改用 **logcat 当判据**（`MediaPlayerNative: info/warning (3, 0)`） |
 | `run-as` 判据反了 | 拒绝信息走 **stderr**，而封装的 `sh()` 只读了 stdout | 同时捕获 stderr |
 | 3 条判据全红，功能其实完全正常 | `dumpsys window windows` 在 Android 37 上把 flags 打印成**符号名列表**（`fl=LAYOUT_IN_SCREEN …`），不再是十六进制 `fl=#81810200`，只认十六进制的解析器**悄悄返回 `None`** | 两种格式都认；并留一条不依赖文本解析的退路（像素亮度 0.00% ↔ 99.52%） |
+| **（v1.0.9）连拍永远拍不到播放** | **采样点错位**：影片仅 4 秒，`screencap` 约 0.5 s/张。脚本先"等大图页页码出现"（1~3 s）**再**连拍 → 连拍起点永远晚于播放结束。logcat 铁证：播放发生在 `09:36:36.491~09:36:40.747`，而连拍 `17:36:42` 才开始 —— **把"没抓到"错读成"没播"** | **点开那一瞬就开始连拍**（`tap_thumbnail()` 只点不等）→ 立刻 `burst()`；没抓到就退出大图页**再试，共三次**；`BURST` 16→12；并在 `run()` 开头 `logcat -c` 清缓冲（否则上一轮的记录会算进这一轮） |
+| **（v1.0.9）正方形量出 0.182 而非 0.255** | **系统手势条**的白色胶囊落在影片条带内，把白像素包围盒从 204×204 撑到 **284×1564**（假比例 0.182） | `square_of()` 显式排掉 `GESTURE_Y=2350 / X0=350 / X1=730`；并把这条**写进 `selftest_measure.py` 的第 4 组场景**钉死 |
+| **（v1.0.9）自测量出正方形 5.268（期望 1.000）** | 自测读的是**陈旧的** `_preview-frame.png`（还带那条早先版本画的横贯全宽白线）。**素材变了，基准没变** | 预览帧改为**随素材一起生成**（`make_probe_assets.py` 落 `probe-preview.png`），并删掉旧文件 |
+| **（v1.0.9）release 轮证据落错目录** | 复用了走查模块的 `OUT`，但 **`M.OUT`（模块级）与 `W.OUT`（walkthrough 的）是两个不同的全局**。只改了 `W.OUT`，`M.grab()`/`M.burst()` 仍往旧目录写 | **两个都设**（脚本里留了注释）。删掉落错的文件重跑 |
+| **（v1.0.9）对照轮误报"找不到实况胶囊"** | 选图器按"最暗的一格"挑，挑中纯黑 `(0,0,0)` 的**坏格子**（MediaProvider 残留行），导错图 | 改成按"与静止图均值色的**距离**"最近来挑（阈值 < 50），并在导入后加一条"照片库有「实况」角标"自证 |
 | **教训** | **"解析不到" ≠ "没生效"**。判据撒谎比功能出错更危险 —— 像素证据本来已经说明功能正确 | 关键结论要有一条不经过文本解析的证据 |
+| **教训（v1.0.9）** | **别让判据自己说了算。** 判据要能"证伪自己"：用同一份量代码去量**手工合成**的"正确/被拉伸"两张图，期望值必须**差 4 倍**（1.000 vs 0.256），才说明这套量法真的在分辨差异 | `tools/motion/selftest_measure.py` —— 4 组场景全过才算判据可用 |
+| **教训（v1.0.9）** | **"修好了"要有力度，必须先让缺陷重现。** 只说 B 端通过，无法排除"这套量法量什么都通过" | **A/B 对照轮**：同设备、同素材、同量代码，A=`dist/FPB-v1.0.8.apk`（缺陷版）→ 复现 1080×2120 / 0.255；B=v1.0.9 → 1080×608 / 1.000 |
 
 ### UI / 产品
 
@@ -293,12 +366,17 @@
 | `content query --projection is_motion_photo` 报 `Invalid column` | **shell 的投影白名单里没有这列，不能据此以为合成失败**。改用 `adb exec-out content read` 读出 31,413 B 与源文件逐字节比对（`exec-out` 免 CRLF 污染） |
 | 托管 Python 没有 PIL | 诊断脚本改为只用不依赖 PIL 的模块；算像素亮度用 raw `screencap`（不加 `-p`）自己解码 |
 | release 包无法覆盖安装 debug 包 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE`（签名不同）。**卸载不可逆**，必须先向用户列清代价并确认 |
+| **（v1.0.9）要造"带几何形状"的影片，本机没 ffmpeg** | 用 **PyAV** 合成：`pip install av`（清华镜像 **403**，改阿里云 `https://mirrors.aliyun.com/pypi/simple/` 成功，18.1.0）。**`av.Rational` 不存在**，时间基用 `fractions.Fraction(1, FPS)`。编码参数 `{"crf":"18","preset":"ultrafast","profile":"baseline","g":"10"}` |
+| **（v1.0.9）MediaProvider 残留行清不掉** | 坏格子来自媒体库里指向已删文件的残留行。`mv` 不删行；无 root，`pm clear` 无效，对已删路径重发扫描广播也无效 | 只能**按缩略图颜色挑格子**绕开（本项无解的根因，不是脚本 bug） |
+| **（v1.0.9）`_preview-frame.png` 是"旧基准"** | 素材改版后自测仍读旧预览帧 → 判据基准与实际素材不一致 | 预览帧必须**由素材生成脚本一起产出**，不能手工维护 |
+| **（v1.0.9）Kotlin 2.x 的 `.kotlin/` 目录** | 构建产物不再落在 `.gradle/` 下，`.gitignore` 不排它，`git add -A` 会把整个目录带进仓库 | `.gitignore` 补回 `.kotlin/` |
 
 ### 签名
 
 | 坑 | 说明 |
 |---|---|
 | `.gitignore` 排除了 `keystore.properties`，却漏了写明文口令的 `README-签名说明.md` | 已改为排除整个 `/keys/`。教训：**排除"文件"不如排除"目录"** —— 凭据目录里任何新增文件都该默认不入库 |
+| **（v1.0.9）用文件大小判断"包换没换"会骗自己** | v1.0.8 与 v1.0.9 的 APK **字节数完全相同**（3,290,205 B），内容却不同。判据要用 SHA-256 或 `aapt2 dump badging` 看 `versionCode` |
 
 ---
 
@@ -310,17 +388,28 @@ export JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"
 # local.properties 需含 sdk.dir=D:/AndroidSdk（不入库，需自建）
 
 # 2. 跑测试（无需设备）
-./gradlew.bat :app:testDebugUnitTest        # 应为 216 项，0 失败
+./gradlew.bat :app:testDebugUnitTest        # 应为 229 项，0 失败
 
 # 3. 出包
 ./gradlew.bat :app:assembleDebug            # 日常验证
 ./gradlew.bat :app:assembleRelease          # 需要 keys/keystore.properties 存在
 
-# 4. 真机验收（需要设备 + 已装对应包）
+# 4. 造走查素材（本机无 ffmpeg，需要 PyAV）
+pip install av                              # 清华镜像 403，用 https://mirrors.aliyun.com/pypi/simple/
+python tools/motion/make_probe_assets.py    # 产出 probe-base.jpg / probe-clip.mp4 / probe-motion.jpg / probe-preview.png
+
+# 5. 先验判据本身（**在跑走查之前**）
+python tools/motion/selftest_measure.py     # 4 组场景全过，才说明"量像素"这套量法可信
+
+# 6. 走查 / 验收（需要设备 + 已装对应包）
+python tools/walkthrough-v109-motion.py     # A/B 对照轮（A=v1.0.8 缺陷版，B=修复版）
+python tools/v109-release-acceptance.py     # 正式包，19 项（含 FLAG_SECURE 正反对照）
 python tools/v108-acceptance.py             # debug 包，22 项
-python tools/v108-release-acceptance.py     # release 包，28 项（含 FLAG_SECURE 正反对照）
+python tools/v108-release-acceptance.py     # release 包，28 项
 ```
 
 **注意**：`v108-acceptance.py` 依赖设备上的**老数据**（v1.0.7 导入的记录）。换机或清了数据后，"老记录回归"那一项会被脚本主动判为不可验并退出 —— 这是设计如此，不是故障。
 
-**动手前先读**：`dist/FPB-v1.0.8-发布说明.md`（本版细节）、`keys/README-签名说明.md`（本地，签名凭据，**含明文口令，不要外传**）。
+**注意**：`v109-release-acceptance.py` 会 `import` `tools/walkthrough-v109-motion.py` 复用其量法，且**必须同时设 `W.OUT` 与 `M.OUT`**（两个不同的全局），否则证据会落进走查目录。
+
+**动手前先读**：`dist/FPB-v1.0.9-发布说明.md`（本版细节）、`keys/README-签名说明.md`（本地，签名凭据，**含明文口令，不要外传**）。
