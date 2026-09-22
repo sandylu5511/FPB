@@ -7,6 +7,7 @@ import com.fpb.vault.crypto.AeadCipher
 import com.fpb.vault.crypto.Argon2Kdf
 import com.fpb.vault.crypto.KdfParams
 import com.fpb.vault.crypto.SecureBytes
+import com.fpb.vault.crypto.TransientSecretKey
 import com.fpb.vault.crypto.UnlockOutcome
 import com.fpb.vault.crypto.VaultDek
 import com.fpb.vault.crypto.VaultDomain
@@ -26,7 +27,6 @@ import com.fpb.vault.model.VideoRef
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 
 /** 标签及其条目数量。 */
 data class TagCount(val name: String, val count: Int)
@@ -79,8 +79,6 @@ class VaultSession(
     private val idFactory: () -> String = RowIds::random,
 ) : AutoCloseable {
 
-    enum class State { LOCKED, UNLOCKED }
-
     /** 锁定状态下试图读取明文时抛出。宁可让调用方崩溃，也不返回空数据。 */
     class LockedException(message: String = "保险库已锁定，拒绝访问明文数据") : IllegalStateException(message)
 
@@ -101,9 +99,56 @@ class VaultSession(
 
         val problemCount: Int get() = missingRows + unreadableRows
 
+        /**
+         * 给用户看的那句话。库干净时是 null（界面据此不显示告警条）。
+         *
+         * **两类问题必须并列出现，不能挑一个说。** 它们的原因和修法都不同：
+         * 解密失败指向"这一段字节坏了"（存储介质出问题、或被改过），
+         * 记录丢失指向"数据库里那一行没了"（被清理、或清单与库不同步）。
+         * 用一个 `when` 只报前一类，另一类就永远看不见 —— 用户照着提示去查存储，
+         * 而真正少掉的那几条还是不见踪影，最后只能得出"这个应用会自己丢数据"。
+         *
+         * 放在数据类上而不是界面里，是因为它是这个数据**自己的**说法：
+         * 界面只负责把它显示出来。这样它也就成了可以直接断言的东西
+         * —— 这条缺陷原先正因为藏在界面的私有方法里，才躲过了所有测试。
+         */
+        fun warning(): String? {
+            val parts = listOfNotNull(
+                unreadableRows.takeIf { it > 0 }
+                    ?.let { "$it 条内容解密失败（存储可能已损坏）" },
+                missingRows.takeIf { it > 0 }
+                    ?.let { "$it 条记录在数据库里找不到了" },
+            )
+            return if (parts.isEmpty()) null else parts.joinToString("、", prefix = "有")
+        }
+
         companion object {
             fun fresh() = LoadReport(0, 0, 0, manifestUnreadable = false, isFresh = true)
         }
+    }
+
+    /**
+     * 本域审计槽的状态。
+     *
+     * ## 为什么"没有槽"与"槽读不出来"必须分开
+     *
+     * 两者在读数上都是"读不到诱饵那本账"，而它们对用户的意义相反：
+     *
+     * - [Absent]：这个功能还没建立。属于**正常状态**，界面给一个补建的入口就好。
+     * - [Damaged]：槽在，但解不出来（被改过、或存储损坏）。这是**要报出来的事**。
+     *
+     * 合并成一个可空值，就会把第二种显示成第一种 —— 而"把一次可能的入侵
+     * 说成一切正常"正是这个功能最不该犯的错。
+     */
+    sealed interface AuditSlot {
+        /** 没有槽：还没建立审计通道（或已经被拆掉）。 */
+        data object Absent : AuditSlot
+
+        /** 槽在，但解不出来。调用方**不要**把它当成"没有槽"。 */
+        data object Damaged : AuditSlot
+
+        /** 槽可用。调用方负责把它 [AuditKey.close]。 */
+        class Present(val key: AuditKey) : AuditSlot
     }
 
     // ==================== 状态 ====================
@@ -134,11 +179,54 @@ class VaultSession(
 
     private var loadReport: LoadReport = LoadReport.fresh()
 
-    /** 状态变化回调，供界面在自动锁定时跳回解锁页。 */
-    var onStateChanged: ((State) -> Unit)? = null
+    /** 本域登录账本。解锁时载入，锁定时随其余明文一起清掉（见 [clearState]）。 */
+    private var loginLog: LoginLog = LoginLog.EMPTY
 
-    val state: State get() = if (dek != null) State.UNLOCKED else State.LOCKED
+    /**
+     * 账本**读不出来**（而不是"一条都没有"）。
+     *
+     * 与 [loginLog] 并存而不是从"账本为空"反推：两者在读数上一模一样，
+     * 而它们对用户的意义相反 —— 一个是"没人进来过"，一个是"记录被人动过手"。
+     */
+    private var loginLogUnreadable: Boolean = false
 
+    /**
+     * 诱饵会话的账本钥匙。
+     *
+     * ## 两本账用的是两把不同的钥匙，这是本文件的重点
+     *
+     * | 会话 | 账本钥匙 | 行 id 的派生材料 |
+     * | --- | --- | --- |
+     * | 真库 | 真库 DEK | 真库 DEK |
+     * | 诱饵库 | [AuditKey] | [AuditKey] |
+     *
+     * 两边**都不用诱饵 DEK**。于是：
+     *
+     * - 真库 DEK 泄露 → 能读假密码的登录时间线，**读不到诱饵库的任何笔记**
+     * - 诱饵 DEK 泄露 → 能读诱饵库全部内容，**读不到真库那本账**
+     *   （连它的行 id 都算不出来）
+     *
+     * 这就是「真库借出的是一把只够看账本的钥匙」在代码里的落点。
+     * 换回"真库侧存一份诱饵 DEK 副本"的做法会让第一条失效 ——
+     * 那时真库 DEK 一泄露就等于诱饵库整个泄掉，而被胁迫时交出去的那个库
+     * 本来正是最后一道掩护。
+     *
+     * 只有诱饵会话会在解锁时给它赋值（见 [prepareLoginLog]），真库侧恒为 null：
+     * 真库读那本账靠的是本域的**审计槽**（见 [auditSlot]），那是一条不同的路径。
+     */
+    private var auditKey: AuditKey? = null
+
+    /**
+     * 是否处于解锁态。**这是"当前锁没锁"的唯一事实来源。**
+     *
+     * 这里原先还有一套 `State` 枚举 + `state` 属性 + `onStateChanged` 回调，
+     * 注释说它是"供界面在自动锁定时跳回解锁页"。实际上全工程没有一处给那个回调
+     * 赋过值，跳回解锁页是由界面自己的 `onForegrounded()` / `tick()` 完成的
+     * —— 而它们本来就掌握"锁定发生"这一刻，不需要谁来通知。
+     *
+     * 一套只被测试用、却被注释描述成正在干活的机制，比一段明显的死代码更危险：
+     * 读代码的人会以为锁定的通知走它，于是漏掉真正的路径。
+     */
     val isUnlocked: Boolean get() = dek != null
 
     /** 当前打开的库。锁定时为 null。 */
@@ -146,8 +234,6 @@ class VaultSession(
 
     /** 是否为诱饵库。为 true 时上层必须禁用改密码、换恢复码等会污染真库密钥的操作。 */
     val isDecoy: Boolean get() = dek?.domain == VaultDomain.DECOY
-
-    val lastLoadReport: LoadReport get() = loadReport
 
     val noteCount: Int get() = index.size
 
@@ -173,11 +259,9 @@ class VaultSession(
      */
     fun unlock(outcome: UnlockOutcome.Unlocked): LoadReport {
         // 幂等：先无条件清掉可能残留的旧会话，避免两把 DEK 同时存在。
-        // 这里刻意**不发 LOCKED 回调** —— 回调表达的应当是"状态迁移"，
-        // 而这一次只是内部清理。若它发出 LOCKED，已经解锁的会话再次解锁
-        // （界面重建、解锁失败后重试）时回调序列会变成 LOCKED → UNLOCKED，
-        // 界面按 LOCKED 跳回解锁页，用户看到一次莫名其妙的闪回。
-        val wasUnlocked = dek != null
+        // 注意这一次清理**不代表"用户被锁了"**：真正的锁定只由 [lock] 表达，
+        // 界面也只在 [lock] 之后才回解锁页。把这里当成锁定事件会让
+        // "界面重建""解锁失败后重试"这类正常路径触发一次莫名其妙的闪回。
         clearState()
 
         val newDek = outcome.takeDek()
@@ -190,24 +274,24 @@ class VaultSession(
                 // 因此这里直接判定解锁失败，让用户从备份恢复。
                 throw LockedException("索引清单无法解读，保险库内容不可信任")
             }
+            // 账本与清单的处理刻意不同：清单坏了解锁必须失败（写进去会毁掉索引），
+            // 而账本坏了只是"这一段记录看不到"，不该把用户挡在门外 ——
+            // 它只落到 loginLogUnreadable 上，由界面如实说出"读不出来"。
+            prepareLoginLog()
         } catch (t: Throwable) {
             clearState()
             newDek.close()
             throw t
         }
-        // 只在"锁定 → 解锁"这次真实迁移上通知界面
-        if (!wasUnlocked) onStateChanged?.invoke(State.UNLOCKED)
         return loadReport
     }
 
     /** 锁定并清零密钥。可重复调用。 */
     fun lock() {
-        val wasUnlocked = dek != null
         clearState()
-        if (wasUnlocked) onStateChanged?.invoke(State.LOCKED)
     }
 
-    /** 清空一切解锁态数据，不发任何回调。 */
+    /** 清空一切解锁态数据。 */
     private fun clearState() {
         dek?.close()
         dek = null
@@ -216,6 +300,14 @@ class VaultSession(
         brokenIds.clear()
         backgroundedAt = null
         loadReport = LoadReport.fresh()
+        // 账本里的时刻是"谁什么时候进来过"，属于明文，必须随其余明文一起消失。
+        // 漏掉这两行的后果是锁屏之后内存里还躺着一份完整的出入记录。
+        loginLog = LoginLog.EMPTY
+        loginLogUnreadable = false
+        // 审计钥匙同理：它不是笔记的钥匙，但它是"这个库被人用过"的完整线索。
+        // 留在内存里等于把诱饵库那本账的入口挂在锁屏之后。
+        auditKey?.close()
+        auditKey = null
     }
 
     override fun close() = lock()
@@ -294,6 +386,163 @@ class VaultSession(
 
     /** 数据库密文与附件密文的总占用。不含 SQLite 页开销。 */
     fun storageBytes(): Long = rows.totalBytes() + blobs.totalBytes()
+
+    /**
+     * 库占用的**分类明细**。
+     *
+     * [storageBytes] 只回答"一共占了多少"，而设置页里用户想问的是
+     * "**是什么**占了这么多" —— 尤其是"我删了那么多记录，空间为什么没降下来"，
+     * 答案通常落在 [orphanBytes] 或 [tempBytes] 上。
+     *
+     * ## 明文大小为什么要单独算
+     *
+     * 磁盘上存的是密文，比明文多出固定开销（每块 28 字节，分块格式再加 24 字节头）。
+     * 用户心里的"大小"是**明文的那个数**（"我导入的是一段 2.1 GB 的视频"），
+     * 两个数都给出来，才不会出现"应用说占 2.1 GB、我明明只放了 2.1 GB"的疑惑。
+     *
+     * 视频的明文长度直接从分块头读（[BlobSink.chunkHeader]），不必额外落一个字段 ——
+     * 头部本来就要记它，否则读不出块边界。
+     */
+    data class StorageUsage(
+        /** 数据库里全部行（含清单行）的密文占用。 */
+        val rowBytes: Long,
+        val photoBytes: Long,
+        val videoBytes: Long,
+        val photoPlainBytes: Long,
+        val videoPlainBytes: Long,
+        /**
+         * 磁盘上**真实存在**的附件数量。
+         *
+         * 与 [photoBytes] 同源：两者都只在"这个文件确实躺在附件目录里"时才计数。
+         * 拿"记录里引用了几个"来代替会得到一行"照片 5 张 · 3 MB"，
+         * 而其中一张的文件其实早就没了 —— 用户从这一行上看不出任何异常，
+         * 也不会想到那条记录里的某张图已经永远打不开了。
+         */
+        val photoCount: Int,
+        val videoCount: Int,
+        /**
+         * 记录里引用了、文件却不在磁盘上的附件数。
+         *
+         * 与 [orphanCount] 是**方向相反**的两件事：孤儿是"文件多出来了"，
+         * 这一项是"文件不见了"。两者都不能藏：前者白占空间，后者意味着
+         * 某条记录里已经有东西打不开，而在此之前界面上没有任何地方提过它。
+         *
+         * 这一项不并进 [totalBytes] —— 它描述的是**缺失**，不是占用。
+         */
+        val missingPhotoCount: Int,
+        val missingVideoCount: Int,
+        /**
+         * 目录里存在、但没有任何本库记录引用的附件。
+         *
+         * 这里**不判** [ownedByThisVault]：那是"能不能删"的判据，要跑一次密文认证；
+         * 而统计只是报数。代价是它可能把另一个域（诱饵库）的附件也数进来 ——
+         * 所以界面上这一项的文案是"未被引用的附件"，动作是用户自己点清理，
+         * 而真正的删除永远由 [purgeOrphanBlobs] 按域判定，绝不会误删另一个库。
+         */
+        val orphanBytes: Long,
+        val orphanCount: Int,
+        /** 写入中断留下的半截文件（[BlobSink.staleTempBytes]）。 */
+        val tempBytes: Long,
+    ) {
+        val totalBytes: Long get() = rowBytes + photoBytes + videoBytes + orphanBytes + tempBytes
+    }
+
+    /**
+     * 统计占用明细。
+     *
+     * 锁定时返回 null，而**不是**一份"全部都是孤儿"的表：分类靠的是内存索引里
+     * "哪些 blobId 被引用"，而索引在锁定时是空的 —— 那种回答不是不精确，是反的。
+     */
+    fun storageUsage(): StorageUsage? {
+        if (dek == null) return null
+
+        val (referencedPhotos, referencedVideos) = referencedBlobIds()
+
+        var photoBytes = 0L
+        var photoPlainBytes = 0L
+        var photoCount = 0
+        var videoBytes = 0L
+        var videoPlainBytes = 0L
+        var videoCount = 0
+        var orphanBytes = 0L
+        var orphanCount = 0
+
+        blobs.listIds().forEach { blobId ->
+            val stored = blobs.sizeOf(blobId)
+            when {
+                blobId in referencedPhotos -> {
+                    photoBytes += stored
+                    photoPlainBytes += plainBytesOf(blobId, stored)
+                    photoCount++
+                }
+
+                blobId in referencedVideos -> {
+                    videoBytes += stored
+                    videoPlainBytes += plainBytesOf(blobId, stored)
+                    videoCount++
+                }
+
+                else -> {
+                    orphanBytes += stored
+                    orphanCount++
+                }
+            }
+        }
+
+        return StorageUsage(
+            rowBytes = rows.totalBytes(),
+            photoBytes = photoBytes,
+            videoBytes = videoBytes,
+            photoPlainBytes = photoPlainBytes,
+            videoPlainBytes = videoPlainBytes,
+            // 张数与字节在**同一个分支里一起累加**，因此两者不可能对不上：
+            // 一个文件要么同时进了字节和张数，要么两边都没进。
+            photoCount = photoCount,
+            videoCount = videoCount,
+            missingPhotoCount = referencedPhotos.size - photoCount,
+            missingVideoCount = referencedVideos.size - videoCount,
+            orphanBytes = orphanBytes,
+            orphanCount = orphanCount,
+            tempBytes = blobs.staleTempBytes(),
+        )
+    }
+
+    /**
+     * 索引里被引用的附件 id，按引用它的字段分成两组。
+     *
+     * **这个集合在全工程只能有一处定义。** 它有两个消费者，而两边的出错后果不对等：
+     * - [purgeOrphanBlobs] 拿它决定"什么算垃圾"。漏掉一种附件类型，清理就会
+     *   把那一类全部**当垃圾删掉**，而记录还留着 —— 用户看到的是"附件全变成
+     *   打不开的黑块"，且不可逆。
+     * - [storageUsage] 拿它给占用分类。漏掉只会让那一类显示成"未被引用"。
+     *
+     * 这个坑踩过一次：原先只算了图片，视频被当孤儿。当时的对策是在原地加一句
+     * 注释提醒"视频也要算进去"。但注释拦不住第二个人、也拦不住第二次 ——
+     * 只有把集合收敛成一处，新增一种附件类型（比如音频）时才不存在
+     * "改了一处忘了另一处"的可能。
+     */
+    private fun referencedBlobIds(): Pair<Set<String>, Set<String>> {
+        val photos = HashSet<String>()
+        val videos = HashSet<String>()
+        index.values.forEach { note ->
+            note.images.forEach { photos += it.blobId }
+            note.videos.forEach { videos += it.blobId }
+        }
+        return photos to videos
+    }
+
+    /**
+     * 附件密文对应的明文字节数。
+     *
+     * 视频（分块格式）从头部读；其余（整块格式的图片）用总长减固定开销反推 ——
+     * 整块格式就是 `nonce + 密文`，而密文 = 明文 + 认证标签，所以减法成立。
+     * 这样统计几百张图时只需要读几个文件头，不必把图**解密**出来只为量一下大小。
+     */
+    private fun plainBytesOf(blobId: String, storedBytes: Long): Long {
+        blobs.chunkHeader(blobId)?.let { return it.plainSize }
+        val overhead = AeadCipher.OVERHEAD_BYTES.toLong()
+        return if (storedBytes > overhead) storedBytes - overhead else 0L
+    }
 
     // ==================== 写 ====================
 
@@ -588,11 +837,8 @@ class VaultSession(
      * 但这是个手动触发、低频次的操作，换来的是"不可能误删另一个库"。
      */
     fun purgeOrphanBlobs(): Int {
-        // **视频也要算进"活着"的集合**。漏掉的话，每一次孤儿清扫都会把库里
-        // 全部视频的密文当作垃圾删掉 —— 而记录还留着，表现为"视频全变成打不开的黑块"。
-        val live = index.values
-            .flatMap { it.images.map(ImageRef::blobId) + it.videos.map(VideoRef::blobId) }
-            .toSet()
+        val (imageIds, videoIds) = referencedBlobIds()
+        val live = imageIds + videoIds
 
         var removed = blobs.purgeStaleTempFiles()
         blobs.listIds().forEach { blobId ->
@@ -600,6 +846,263 @@ class VaultSession(
             if (ownedByThisVault(blobId) && blobs.delete(blobId)) removed++
         }
         return removed
+    }
+
+    // ==================== 登录记录 ====================
+    //
+    // 这一段回答的问题是"谁在什么时候进来过"。三样落盘物，全部沿用本类已有的两条纪律
+    // （行 id 由 DEK 做 HMAC 派生、每域各自一份密文），因此：
+    //
+    // | 落盘物 | 行 id 由谁算出 | 用什么封 |
+    // | --- | --- | --- |
+    // | 本域登录账本 | 本域 DEK | 本域 DEK |
+    // | 真库侧的诱饵钥匙镜像 | 真库 DEK | 真库 DEK |
+    //
+    // ## 为什么必须多存一份"诱饵钥匙的镜像"
+    //
+    // 真库与诱饵库的行混在同一张表里、各自只能用各自的 DEK 解（见类注释）。
+    // 于是"假密码登录过"这件事，**真库会话在没有额外帮助的情况下永远读不到** ——
+    // 它连那本账所在行的 id 都算不出来（id 是 `HMAC(诱饵DEK, 标签)`）。
+    //
+    // 所以真库侧额外保存一份**诱饵 DEK 的副本**（用真库 DEK 封），
+    // 解锁时用它把假库那本账读出来。方向是**单向的**：
+    // - 真库 → 能读两本账（真库自己那把 + 镜像给的诱饵钥匙）
+    // - 假库 → 只能读自己那本。它没有真库 DEK，**离线也算不出真库那行叫什么名字**，
+    //   因此被胁迫时交出假密码，对方在应用里看不到任何"真库被用过"的痕迹。
+    //
+    // 反过来的设计（两域共用一把"审计密钥"）实现更省事，但会让假密码能解出
+    // **全部**记录、包括真密码的登录时间 —— 那正好是被胁迫场景里最不该给出去的东西。
+    //
+    // ## 代价（要如实写下来）
+    //
+    // 真库持有诱饵 DEK 的副本，意味着**知道真密码的人也能打开诱饵库那本账**。
+    // 这不是新增的泄露：拿到真密码的人本来就拿到了全部内容，
+    // 而诱饵库的用途恰恰是"给人看的那个库"。
+    // 真正需要守住的方向是反过来的那一侧，而它守住了。
+
+    /**
+     * 本域登录账本。解锁时已载入内存，因此这里不会碰磁盘。
+     *
+     * 锁定状态下抛出异常而不是返回空账本 —— 理由与 [notes] 相同，
+     * 而且在"专门用来看有没有人进来过"的功能上更致命：空的会被读成"没人进来过"。
+     */
+    fun loginLog(): LoginLog {
+        requireUnlocked()
+        return loginLog
+    }
+
+    /**
+     * 本域账本**读不出来**（损坏、或被改过），而不是"一条都没有"。
+     *
+     * 这两种情况在读数上一模一样（都是空），因此必须分开表达：界面要能把
+     * "读不出来"说出来，而不是显示一个干净的"还没有记录"。
+     */
+    fun loginLogUnreadable(): Boolean = loginLogUnreadable
+
+    /**
+     * 记一笔。写入失败会抛异常，由调用方决定要不要让用户知道。
+     *
+     * **调用方不该让"记账失败"阻断解锁**：记录不是用户的内容，
+     * 为它把用户挡在门外是本末倒置。但也不能静默吞掉（见 [VaultAppState] 的处理）。
+     */
+    fun recordLogin(kind: LoginKind, at: Long, detail: Int = 0) {
+        recordLogins(listOf(LoginEvent(kind, at, detail)))
+    }
+
+    /**
+     * 一次写入多条。
+     *
+     * ## 为什么必须能"一次写多条"
+     *
+     * 成功解锁时要写两件事：这次登录本身，以及"在此之前有人输错过 N 次"。
+     * 分成两次写的话，中间那次失败会留下一个坏状态：失败次数已经清零、
+     * 而记录没写进去 —— 那批失败**凭空消失**。合成一次写，
+     * 要么两条都在，要么一条都没有（这时调用方还不该清零计数）。
+     */
+    fun recordLogins(events: List<LoginEvent>) {
+        requireUnlocked()
+        if (events.isEmpty()) return
+        // 本域还没有账本通道（诱饵库未配对）时**静默跳过**。
+        //
+        // 这里绝不能抛异常、更不能提示：唯一会走到这条路的正是"用假密码进来的人"，
+        // 对着他弹一句"登录记录写入失败"，等于当场告诉他这是个被监视的诱饵库。
+        // 真库那边会明确显示"假密码那一半还没开始记录"，由用户自己补一次绑定。
+        if (logKeyOrNull() == null) return
+        var next = loginLog
+        events.forEach { next = next.appended(it) }
+        persistLoginLog(next)
+        loginLog = next
+        loginLogUnreadable = false
+    }
+
+    /**
+     * 整本换掉（合并"另一本账"、或清空时用）。
+     *
+     * 与 [recordLogins] 分开，是因为合并进来的记录**不一定都比现有的新**：
+     * 对着一个按时间递增的列表做追加，会得到一个乱序的列表，
+     * 而 [LoginLog] 截断时丢的是"从头数起的那几条"—— 乱序之后丢的就不是最旧的了。
+     */
+    fun replaceLoginLog(log: LoginLog) {
+        requireUnlocked()
+        if (logKeyOrNull() == null) return
+        persistLoginLog(log)
+        loginLog = log
+        loginLogUnreadable = false
+    }
+
+    /**
+     * 清空本域账本。
+     *
+     * 清空与"账本损坏"是两件事，因此这里**只清内存与密文，不把 [loginLogUnreadable] 抹成 false**
+     * 之外的东西 —— 同时也就意味着"清空之后确实读得出来了"（新写的空账本一定是合法的）。
+     */
+    fun clearLoginLog() {
+        requireUnlocked()
+        persistLoginLog(LoginLog.EMPTY)
+        loginLog = LoginLog.EMPTY
+        loginLogUnreadable = false
+    }
+
+    /**
+     * 用**审计钥匙**读诱饵库那本账。
+     *
+     * 这是"有人用过假密码"能被真库发现的唯一入口。
+     *
+     * [auditKey] 必须来自本域审计槽（[auditSlot]）。**故意不接受诱饵 DEK**：
+     * 那会把"真库只借出一把够看账本的钥匙"这条性质拆掉，而接口一旦留下这个口子，
+     * 迟早会有人图省事把诱饵 DEK 传进来。
+     *
+     * @return `null` 表示那一行存在但读不出来（损坏/被改）；空账本表示"确实还没记过"。
+     */
+    fun decoyLoginLog(auditKey: AuditKey): LoginLog? {
+        requireUnlocked()
+        val rowId = decoyLogRowId(auditKey)
+        val row = rows.load(rowId) ?: return LoginLog.EMPTY
+        val plain = AeadCipher.open(
+            auditKey.expose(),
+            row.nonce,
+            row.ciphertext,
+            Aad.entryField(rowId, DECOY_LOG_AAD_FIELD),
+        ) ?: return null
+        return try {
+            LoginLogCodec.decode(plain)
+        } finally {
+            SecureBytes.zeroize(plain)
+        }
+    }
+
+    /**
+     * 清空**诱饵库那本账**。
+     *
+     * 用途只有一个：用户在"登录记录"页点清空时，要把两本账都清掉。
+     * 只清真库那本的话，用户会看到"清空之后列表里还留着几条假密码登录"——
+     * 那一刻他会以为自己清空失败了，而其实只是另一半没被清。
+     */
+    fun clearDecoyLoginLog(auditKey: AuditKey) {
+        requireUnlocked()
+        val rowId = decoyLogRowId(auditKey)
+        val plain = LoginLogCodec.encode(LoginLog.EMPTY)
+        try {
+            val sealed = AeadCipher.seal(
+                auditKey.expose(),
+                plain,
+                Aad.entryField(rowId, DECOY_LOG_AAD_FIELD),
+            )
+            rows.upsert(CipherRow(rowId, sealed.nonce, sealed.ciphertext))
+        } finally {
+            SecureBytes.zeroize(plain)
+        }
+    }
+
+    /**
+     * 本域审计槽。真库读它，才拿得到诱饵库那本账的钥匙。
+     *
+     * ## 为什么是三态而不是可空的钥匙
+     *
+     * "没有槽"与"槽在、但解不出来"在读数上都表现为读不到那本账，
+     * 而它们对用户的意义相反：前者是"这个功能还没建立"（正常状态，补一次就好），
+     * 后者是"有人动过这里"。用 `AuditKey?` 表达会把第二种显示成第一种 ——
+     * 而把一次可能的入侵说成"一切正常"，正是这个功能最不该犯的错。
+     *
+     * **只允许在真库里调用**：诱饵会话算的是另一域的行 id（由真库 DEK 派生），
+     * 它算不出来，硬算也只会得到一个不存在的行 id。所以这里的域校验不是安全边界，
+     * 而是把"调用方搞错了"这件事在最外层拦住。
+     */
+    fun auditSlot(): AuditSlot {
+        if (requireUnlocked().domain != VaultDomain.REAL) return AuditSlot.Absent
+        return readOwnAuditSlot()
+    }
+
+    /** 读本域审计槽。真库用它拿诱饵账本的钥匙，诱饵会话在解锁时用它找自己的钥匙。 */
+    private fun readOwnAuditSlot(): AuditSlot {
+        val own = requireUnlocked()
+        val rowId = derivedRowIdWith(own, AUDIT_SLOT_MAC_INPUT)
+        val row = rows.load(rowId) ?: return AuditSlot.Absent
+        val plain = AeadCipher.open(
+            own,
+            row.nonce,
+            row.ciphertext,
+            Aad.entryField(rowId, AUDIT_SLOT_AAD_FIELD),
+        ) ?: return AuditSlot.Damaged
+        return try {
+            // 长度也要校验：一个被写坏的槽会让审计钥匙拿着长度不对的字节去派生行 id，
+            // 算出一个不存在的行，然后被显示成"假密码从没被用过"。
+            if (plain.size != AeadCipher.KEY_BYTES) {
+                AuditSlot.Damaged
+            } else {
+                AuditSlot.Present(AuditKey.of(plain))
+            }
+        } finally {
+            SecureBytes.zeroize(plain)
+        }
+    }
+
+    /**
+     * 建立审计通道：把**同一把**审计钥匙，分别用真库 DEK 与诱饵 DEK 各封一份。
+     *
+     * ## 为什么写入顺序是契约
+     *
+     * 先写诱饵域那份，成功之后才写真库域那份。于是"真库域有槽"必然蕴含
+     * "诱饵域也有槽" —— 真库会话看到槽时，诱饵会话那边一定写得动账本。
+     *
+     * 反过来先写真库域的话，会留下一个**不会报错的坏状态**：真库以为通道建好了，
+     * 而诱饵库根本记不了。界面上看起来就是"假密码从来没有人用过"，
+     * 一个静默的、且方向最坏的错误结论。
+     *
+     * [decoyDek] 只在"刚设置假密码"或"用户补一次绑定"这两种时刻拿得到 ——
+     * 那也正是建立通道仅有的两个时机。
+     */
+    fun linkAudit(auditKey: AuditKey, decoyDek: VaultDek) {
+        val own = requireUnlocked()
+        require(own.domain == VaultDomain.REAL) { "只有真库可以建立审计通道" }
+        require(decoyDek.domain == VaultDomain.DECOY) { "收到的不是诱饵钥匙：${decoyDek.domain}" }
+        writeAuditSlot(decoyDek, auditKey)
+        writeAuditSlot(own, auditKey)
+    }
+
+    /**
+     * 拆除审计通道（关闭假密码时）。
+     *
+     * 调用方**必须先读走那本账再调这里**，否则它记录的"有人用过假密码"
+     * 会永久读不出来。
+     *
+     * 只删真库域那一份：诱饵域那一份的行 id 由诱饵 DEK 派生，这里既算不出来，
+     * 在诱饵 DEK 被销毁之后也不再需要 —— 它已经永远解不开了。
+     */
+    fun unlinkAudit() {
+        val own = requireUnlocked()
+        require(own.domain == VaultDomain.REAL) { "只有真库需要拆除审计通道" }
+        rows.delete(derivedRowIdWith(own, AUDIT_SLOT_MAC_INPUT))
+    }
+
+    private fun writeAuditSlot(holder: VaultDek, auditKey: AuditKey) {
+        val rowId = derivedRowIdWith(holder, AUDIT_SLOT_MAC_INPUT)
+        val sealed = AeadCipher.seal(
+            holder,
+            auditKey.expose(),
+            Aad.entryField(rowId, AUDIT_SLOT_AAD_FIELD),
+        )
+        rows.upsert(CipherRow(rowId, sealed.nonce, sealed.ciphertext))
     }
 
     // ==================== 内部：索引清单 ====================
@@ -612,12 +1115,207 @@ class VaultSession(
      * - 它和普通笔记的 id **形状完全一致**（都是 32 位随机十六进制），
      *   因此从数据库里看，它与其它行无法区分 —— 不会暴露"哪一行是索引"
      * - 两个域各自得到不同的 id，于是"存在两个清单"也不会显露出来
+     *
+     * 登录账本、审计槽与诱饵账本用的是同一条路子（见 [derivedRowId]），
+     * 加起来的行数越多，上面第二条越重要：只要有**一个**系统行长得不像笔记，
+     * "哪几行是系统行"就成了一条可用的线索。
      */
-    private fun manifestRowId(): String {
-        val dek = requireUnlocked()
+    private fun manifestRowId(): String = derivedRowId(MANIFEST_MAC_INPUT)
+
+    /**
+     * 本域账本的坐标：**用哪把钥匙、行 id 由哪个标签派生、密文绑定哪个 AAD 字段**。
+     *
+     * 把这三样捆在一个类型里，是因为它们必须**同进同出**，而错配不会报错：
+     * 只换钥匙不换标签，会算出真库那本账的行 id，然后拿审计钥匙去解真库的密文
+     * （解不开，显示成"还没有记录"）；只换标签不换密钥，会对着诱饵库那本账
+     * 用真库 DEK 去解（同样解不开、同样静默）。两种错法都只会让人以为
+     * "没人进来过"。
+     */
+    private sealed interface LogKey {
+        /** 真库：账本由本域 DEK 保护。 */
+        class Own(val dek: VaultDek) : LogKey
+
+        /** 诱饵库：账本由审计钥匙保护 —— **不是**诱饵 DEK。 */
+        class Audit(val key: AuditKey) : LogKey
+    }
+
+    /**
+     * 本域账本用的钥匙；`null` = 本域还没有可用的账本通道。
+     *
+     * 只有一种情况会拿到 null：诱饵会话所在的这个库还没有审计槽
+     * （这台设备升级上来、或建立通道时写入失败）。那时它记不了登录 ——
+     * 但**绝不能因此挡住解锁或使用**，见 [prepareLoginLog]。
+     */
+    private fun logKeyOrNull(): LogKey? {
+        val own = dek ?: return null
+        if (own.domain != VaultDomain.DECOY) return LogKey.Own(own)
+        return auditKey?.let { LogKey.Audit(it) }
+    }
+
+    private fun logTag(key: LogKey): ByteArray = when (key) {
+        is LogKey.Own -> LOGIN_LOG_MAC_INPUT
+        is LogKey.Audit -> DECOY_LOG_MAC_INPUT
+    }
+
+    private fun logAadField(key: LogKey): String = when (key) {
+        is LogKey.Own -> LOGIN_LOG_AAD_FIELD
+        is LogKey.Audit -> DECOY_LOG_AAD_FIELD
+    }
+
+    private fun logRowId(key: LogKey): String = when (key) {
+        is LogKey.Own -> derivedRowIdWith(key.dek, logTag(key))
+        is LogKey.Audit -> derivedRowIdFrom(key.key.expose(), logTag(key))
+    }
+
+    /**
+     * 诱饵账本的行 id。
+     *
+     * 真库会话算它时手上**只有审计钥匙**，这正是设计要的：没有诱饵 DEK，
+     * 算不出诱饵库任何一条笔记的行 id。
+     */
+    private fun decoyLogRowId(auditKey: AuditKey): String =
+        derivedRowIdFrom(auditKey.expose(), DECOY_LOG_MAC_INPUT)
+
+    /**
+     * 用 DEK 派生一个系统行的 id。
+     *
+     * 四个系统行（清单、真库账本、审计槽、诱饵账本）共用这一个实现：
+     * 它们的 id 都必须是"32 位十六进制、形状与笔记行一致"，才有
+     * "从数据库里看不出哪一行是系统行"这个性质。分成几份实现，迟早会有一份走样 ——
+     * 而走样之后不会报错，只会悄悄多出一条可被识别的线索。
+     */
+    private fun derivedRowId(tag: ByteArray): String = derivedRowIdWith(requireUnlocked(), tag)
+
+    /**
+     * 同一套派生，但用**指定的** DEK。
+     *
+     * 它不能走 [derivedRowId] —— 那个用的是当前会话的 DEK，而这里要算的
+     * 可能是另一域的行 id（或本域但由另一把钥匙保护的行）。
+     */
+    private fun derivedRowIdWith(dek: VaultDek, tag: ByteArray): String =
+        derivedRowIdFrom(dek.expose(), tag)
+
+    /**
+     * 派生材料既可以是 DEK，也可以是审计钥匙 —— 两者都只是 32 字节的 HMAC 密钥。
+     *
+     * ## material 的生命周期（这条最容易读错）
+     *
+     * 传进来的是 `dek.expose()` / `auditKey.expose()` 交出来的
+     * **`SecureBytes` 内部数组本身**（一路 `return bytes`，不复制），
+     * 所以它是**会话级**的：归那两个对象所有，由它们的 `close()` 清零。
+     *
+     * 而这里构造的密钥副本是**一次调用级**的，[TransientSecretKey] 构造时的
+     * `copyOf()` 已经把两者彻底解耦。职责因此是清楚的：
+     * **调用方那份不归这里管，这里这份归 `finally` 管** ——
+     * 不要因为"我们也会清"就省掉 `SecureBytes.close()`，那是另一件事。
+     * 反过来也一样：这里清掉的不是你传进来的那个数组，
+     * 本次返回之后调用方仍然可以继续用它的 material。
+     *
+     * ## 能清到哪、清不到哪（实测）
+     *
+     * 2026-09-20 在 Pixel_7 AVD（SDK 37 / provider AndroidOpenSSL 1.0）上实测：
+     * `getEncoded()` 的调用次数在 `init` 之后是 1、`doFinal` 之后**仍是 1** ——
+     * `Mac` 在 `init` 时就把密钥复制进了自己的上下文，此后不再回读 Java 端。
+     * 于是有两条结论：
+     *
+     * - `init` 之后销毁自持副本**不影响** `doFinal`（派生结果与旧路径逐字节一致），
+     *   这就是 `finally` 可以放在这个位置的理由；
+     * - 但 native 上下文里那份**够不到**。这与 [TransientSecretKey] 的诚实边界是同一条：
+     *   能清的是"我们自己持有的那份"。
+     *
+     * 证据落档在 `dist/HMAC密钥副本-独立评估.md` 与
+     * `dist/evidence/hmac-key-lifecycle/`。
+     *
+     * ## 为什么这里不像 `AeadCipher.open` 那样吞异常
+     *
+     * `AeadCipher.open` 把 `GeneralSecurityException` 吞成 `null`，是因为调用方
+     * 要区分"密码不对"和"密文被篡改"，两者会走到同一个拒绝分支。
+     * 这里的失败（算法名写错、密钥长度非法）是**程序性错误**，而它会抛出的类型分散在
+     * `InvalidKeyException`（`GeneralSecurityException`）与
+     * `IllegalStateException`（`RuntimeException`）两处 —— 要一并吞掉只能
+     * `catch (Exception)`，那会把"派生出一个错误的 id"变成更难查的静默失败。
+     * 所以这里**只加 `finally`、不加 `catch`**：改的是内存，不是异常语义。
+     *
+     * 另外，派生结果本身**不是秘密**（它就是行 id，明文存在库里），
+     * 所以只清密钥副本，不去擦那个返回值。
+     */
+    private fun derivedRowIdFrom(material: ByteArray, tag: ByteArray): String {
         val mac = Mac.getInstance(HMAC_ALGORITHM)
-        mac.init(SecretKeySpec(dek.expose(), HMAC_ALGORITHM))
-        return mac.doFinal(MANIFEST_MAC_INPUT).copyOf(MANIFEST_ID_BYTES).toHex()
+        // 与 AeadCipher 同一个道理：不能用 SecretKeySpec —— 它那份副本够不到，
+        // Android 上也没有可用的销毁手段（见 TransientSecretKey 的 javap 实测）。
+        val secret = TransientSecretKey(material, HMAC_ALGORITHM)
+        return try {
+            mac.init(secret)
+            mac.doFinal(tag).copyOf(MANIFEST_ID_BYTES).toHex()
+        } finally {
+            // 唯一的清零点。放在 init 之后是安全的（Mac 在 init 就读完了密钥），
+            // 而 `finally` 保证"中途抛异常也清" —— 派生失败往往正是反复试错的时刻。
+            // 少了这一行不会有任何症状，所以它由 `scrubbedHmacKeyCount` 这条探针钉住。
+            secret.destroy()
+        }
+    }
+
+    /**
+     * 解锁时定下本域的账本通道，然后把账本读进内存。
+     *
+     * ## 诱饵会话要先把自己的审计钥匙解出来
+     *
+     * 诱饵库那本账**不是**用诱饵 DEK 保护的（见 [auditKey] 的说明），
+     * 所以诱饵会话必须先读本域的审计槽。槽不在时它就没有账本通道，
+     * 后续的写入会**静默跳过** —— 这是刻意的：绝不能对着一个正被胁迫者
+     * 使用的界面弹一句"登录记录写入失败"。真库那边会明确显示
+     * "假密码那一半还没开始记录"，由用户自己补一次。
+     *
+     * ## 读不出来绝不能让解锁失败
+     *
+     * 账本不是用户的内容，为它把用户挡在门外是本末倒置。
+     * 但也绝不能把"读不出来"显示成"还没有记录"—— 那会把一次可能的入侵
+     * 说成"一切正常"，所以这里只落到 [loginLogUnreadable] 上，
+     * 由界面如实说出来。
+     */
+    private fun prepareLoginLog() {
+        if (requireUnlocked().domain == VaultDomain.DECOY) {
+            auditKey = (readOwnAuditSlot() as? AuditSlot.Present)?.key
+        }
+        loadLoginLog()
+    }
+
+    private fun loadLoginLog() {
+        val key = logKeyOrNull() ?: return
+        val rowId = logRowId(key)
+        val row = rows.load(rowId)
+        if (row == null) {
+            // 行不存在 = 这个库还没记过登录。**这是正常的首次状态**，不是损坏，
+            // 因此不能和"解密/解码失败"共用一个分支。
+            loginLog = LoginLog.EMPTY
+            loginLogUnreadable = false
+            return
+        }
+        val aad = Aad.entryField(rowId, logAadField(key))
+        val plain = when (key) {
+            is LogKey.Own -> AeadCipher.open(key.dek, row.nonce, row.ciphertext, aad)
+            is LogKey.Audit -> AeadCipher.open(key.key.expose(), row.nonce, row.ciphertext, aad)
+        }
+        val decoded = plain?.let { LoginLogCodec.decode(it) }
+        plain?.let { SecureBytes.zeroize(it) }
+        loginLog = decoded ?: LoginLog.EMPTY
+        loginLogUnreadable = decoded == null
+    }
+
+    private fun persistLoginLog(log: LoginLog) {
+        val key = logKeyOrNull() ?: return
+        val rowId = logRowId(key)
+        val plain = LoginLogCodec.encode(log)
+        try {
+            val aad = Aad.entryField(rowId, logAadField(key))
+            val sealed = when (key) {
+                is LogKey.Own -> AeadCipher.seal(key.dek, plain, aad)
+                is LogKey.Audit -> AeadCipher.seal(key.key.expose(), plain, aad)
+            }
+            rows.upsert(CipherRow(rowId, sealed.nonce, sealed.ciphertext))
+        } finally {
+            SecureBytes.zeroize(plain)
+        }
     }
 
     private fun loadIndex(): LoadReport {
@@ -802,9 +1500,35 @@ class VaultSession(
         private const val MANIFEST_ID_BYTES = 16
         private const val INDEX_AAD_FIELD = "index"
         private const val PAYLOAD_AAD_FIELD = "payload"
-        private const val HMAC_ALGORITHM = "HmacSHA256"
+        private const val LOGIN_LOG_AAD_FIELD = "login-log"
+        private const val DECOY_LOG_AAD_FIELD = "decoy-log"
+        private const val AUDIT_SLOT_AAD_FIELD = "audit-key"
+        /**
+         * 与 [TransientSecretKey.HMAC_SHA256] 必须是同一个值：
+         * 前者喂给 `Mac.getInstance`，后者决定自检脚本把这次销毁记到哪条探针上。
+         */
+        private const val HMAC_ALGORITHM = TransientSecretKey.HMAC_SHA256
 
+        /**
+         * 系统行的 HMAC 标签 —— **落盘契约，只许新增、不许修改**。
+         *
+         * 改掉 [MANIFEST_MAC_INPUT] 的代价最重：它的行 id 会变，于是所有存量用户
+         * 升级之后"清单行不见了"，被当成全新的空库 —— 唯一的补救是从备份恢复。
+         *
+         * 新增标签时必须确认它与已有的任何一个都**不会碰撞**：派生到同一个 id
+         * 会让两个系统行互相覆盖，表现是"记一次登录，索引就没了"，
+         * 而这两件事看起来毫无关系。
+         *
+         * 它们只给 HMAC 当输入，因此不与 [Aad] 里的字符串共用命名空间，
+         * 但保持同一套 `mixia:<用途>:v1` 写法，便于一眼看出哪些是契约。
+         *
+         * 注意 [DECOY_LOG_MAC_INPUT] 虽然列在这一组里，它的派生材料却**不是**全库 DEK，
+         * 而是审计钥匙 —— 见 [derivedRowIdFrom]。
+         */
         private val MANIFEST_MAC_INPUT = "mixia:index:v1".toByteArray(StandardCharsets.US_ASCII)
+        private val LOGIN_LOG_MAC_INPUT = "mixia:login-log:v1".toByteArray(StandardCharsets.US_ASCII)
+        private val AUDIT_SLOT_MAC_INPUT = "mixia:audit-slot:v1".toByteArray(StandardCharsets.US_ASCII)
+        private val DECOY_LOG_MAC_INPUT = "mixia:decoy-log:v1".toByteArray(StandardCharsets.US_ASCII)
 
         /**
          * 提前把 Argon2id 的代码路径焐热。
@@ -821,6 +1545,13 @@ class VaultSession(
             kek.close()
         }
 
+        /**
+         * KDF 预热用的固定口令。
+         *
+         * 它**不是用户凭据**，所以不走 `wiping`：内容是写死在代码里的常量，
+         * 清不清零都不涉及任何秘密。`security-selfcheck.py` 的凭据清零检查里
+         * 对它做了豁免备案 —— 那里只该漏报常量，不该漏报用户输入。
+         */
         private val WARMUP_PASSWORD = "mixia-kdf-warmup".toCharArray()
     }
 }

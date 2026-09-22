@@ -19,6 +19,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -255,57 +256,59 @@ class AuditRegressionTest {
         }
     }
 
-    // ==================== 6. 解锁时多余的 LOCKED 回调 ====================
+    // ==================== 6. 重复解锁的幂等性 ====================
 
     /**
-     * 缺陷：`VaultSession.unlock()` 第一件事是无条件调用 `lock()`，
-     * 而 `lock()` 在"之前是解锁状态"时会发出一次 `LOCKED` 回调。
+     * 缺陷（历史）：`VaultSession.unlock()` 第一件事是无条件清掉可能残留的旧会话，
+     * 而当时的清理会顺带发一次 `LOCKED` 回调 —— 于是已经解锁的会话再次调用 unlock
+     * （解锁失败后重试、界面重建）时，回调序列变成 `LOCKED → UNLOCKED`。
+     * 界面若按 LOCKED 跳回解锁页，用户会看到一次莫名其妙的闪回。
      *
-     * 后果：已经解锁的会话再次调用 unlock（例如解锁失败后重试、或界面重建）时，
-     * 回调序列是 `LOCKED → UNLOCKED`。界面若按 LOCKED 跳回解锁页，
-     * 用户会看到一次莫名其妙的闪回。状态回调表达的应当是**状态迁移**，
-     * 而不是"内部清理动作"。
+     * 那套回调机制后来整块删掉了：全工程没有任何一处给它赋过值，
+     * 而跳回解锁页真正走的是界面自己的 `onForegrounded()` / `tick()`
+     * （见 `VaultSession.isUnlocked` 的 KDoc）。
+     *
+     * 所以这条用例不再断言回调序列，改为钉住它真正在保护的那个**事实**：
+     * 重复解锁是幂等的 —— 不抛异常，且结束后仍处于解锁态。
      */
     @Test
-    fun `重复解锁不应先发出一次锁定回调`() {
+    fun `重复解锁是幂等的`() {
         val rows = InMemoryRowStore()
         val blobs = InMemoryBlobSink()
         val created = keyring()
         try {
             val session = VaultSession(rows, blobs)
-            val events = mutableListOf<VaultSession.State>()
-            session.onStateChanged = { events += it }
 
             session.unlock(created.keyring.unlock(master.toCharArray()).unlockedOrFail())
             session.unlock(created.keyring.unlock(master.toCharArray()).unlockedOrFail())
 
-            assertEquals(
-                "回调序列应只表达『进入解锁态』这一次迁移，实际为 $events",
-                listOf(VaultSession.State.UNLOCKED),
-                events,
-            )
-            assertTrue(session.isUnlocked)
+            assertTrue("重复解锁之后会话仍应是解锁态", session.isUnlocked)
         } finally {
             created.primaryDek.close()
             created.decoyDek?.close()
         }
     }
 
-    /** 真正的锁定动作必须照常发出回调。 */
+    /**
+     * 锁定必须真的把会话锁上。断言的不只是那个布尔值，还有它的**后果**：
+     * 此后任何读明文的入口都要拒绝，而不是返回空列表。
+     *
+     * （原先这条叫"锁定动作仍会发出锁定回调"，断言的是已删除的回调机制。
+     * 回调用例绿着，却没有任何生产代码在听 —— 那是给一个不存在的功能背书。）
+     */
     @Test
-    fun `锁定动作仍会发出锁定回调`() {
+    fun `锁定之后再读明文会被拒绝`() {
         val rows = InMemoryRowStore()
         val blobs = InMemoryBlobSink()
         val created = keyring()
         try {
             val session = VaultSession(rows, blobs)
-            val events = mutableListOf<VaultSession.State>()
-            session.onStateChanged = { events += it }
 
             session.unlock(created.keyring.unlock(master.toCharArray()).unlockedOrFail())
             session.lock()
-            assertEquals(listOf(VaultSession.State.UNLOCKED, VaultSession.State.LOCKED), events)
+
             assertFalse(session.isUnlocked)
+            assertThrows(VaultSession.LockedException::class.java) { session.notes() }
         } finally {
             created.primaryDek.close()
             created.decoyDek?.close()

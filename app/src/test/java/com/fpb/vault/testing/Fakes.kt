@@ -161,6 +161,10 @@ class InMemoryBlobSink : BlobSink {
     override fun totalBytes(): Long =
         map.values.sumOf { it.storedBytes } + chunked.values.sumOf { it.storedBytes }
 
+    /** 与 [totalBytes] 同源，保证"明细各项之和 == 总数"这条断言在内存实现上也成立。 */
+    override fun sizeOf(blobId: String): Long =
+        map[blobId]?.storedBytes ?: chunked[blobId]?.storedBytes ?: 0L
+
     fun containsPlaintext(needle: String): Boolean {
         val target = needle.toByteArray(StandardCharsets.UTF_8)
         if (target.isEmpty()) return false

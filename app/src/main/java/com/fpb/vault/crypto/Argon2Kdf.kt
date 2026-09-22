@@ -30,6 +30,10 @@ object Argon2Kdf {
      * 属于耗时且耗内存的操作 —— **必须放到后台线程执行**，否则会 ANR。
      *
      * @param password 调用方输入的密码。用 CharArray 而非 String，便于用后清零。
+     *   **这里不做任何规范化**：不 trim、不做大小写折叠，密码原样参与派生。
+     *   理由有两层 —— 一是任何"顺手清理"都会降低用户输入的熵；二是
+     *   注册与解锁必须把同一串输入加工成同一个东西，而"加工规则"只要存在，
+     *   就有被两处实现成不同样子的余地。调用方唯一该做的事是原样传进来。
      */
     fun derive(password: CharArray, params: KdfParams): SecureBytes {
         require(password.isNotEmpty()) { "密码不得为空" }
@@ -50,7 +54,4 @@ object Argon2Kdf {
         generator.generateBytes(password, out)
         return SecureBytes.takeOwnership(out)
     }
-
-    /** 密码规范化：不做 trim、不做大小写折叠 —— 密码就是原样比较，避免意外降低熵。 */
-    fun toChars(password: String): CharArray = password.toCharArray()
 }

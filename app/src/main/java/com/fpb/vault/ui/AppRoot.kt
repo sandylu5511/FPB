@@ -148,6 +148,7 @@ private fun UnlockedHost(state: VaultAppState) {
         is Route.Viewer -> ImageViewerScreen(state, route)
         Route.Photos -> MediaLibraryScreen(state)
         Route.Settings -> SettingsScreen(state)
+        Route.LoginLog -> LoginLogScreen(state)
     }
 }
 

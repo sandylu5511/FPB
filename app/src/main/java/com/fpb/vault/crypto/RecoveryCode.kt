@@ -1,5 +1,7 @@
 package com.fpb.vault.crypto
 
+import androidx.annotation.VisibleForTesting
+
 /**
  * 一次性恢复码。
  *
@@ -54,7 +56,16 @@ object RecoveryCode {
 
     fun isValid(input: String): Boolean = canonicalize(input) != null
 
-    /** 用户输入的展示级预校验：只判断字符是否可能合法，不判断长度。用于输入框的即时反馈。 */
+    /**
+     * 用户输入的展示级预校验：只判断字符是否可能合法，**不判断长度**。
+     *
+     * **生产代码目前不调用它**：解锁页那个恢复码输入框还没接即时反馈
+     * （见 `dist/evidence/audit4/README.md` 第 6.3 节，那里记了为什么不接线）。
+     * 它留在这里而不是删掉，是因为判据已经被测试钉死 ——
+     * 「只拦不可能合法的字符，不拦还差几位」，接线时这是现成、可执行的说明，
+     * 不必从实现里反推。删掉它，那两条断言就只能各自重写一遍字符表。
+     */
+    @VisibleForTesting
     fun isPlausiblePartialInput(input: String): Boolean {
         if (input.length > CANONICAL_LENGTH + GROUP_COUNT) return false
         return input.all { c ->

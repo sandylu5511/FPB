@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Screenshot
@@ -81,6 +82,7 @@ import androidx.fragment.app.FragmentActivity
 import com.fpb.vault.BuildConfig
 import com.fpb.vault.crypto.RecoveryCode
 import com.fpb.vault.crypto.VaultKeyring
+import com.fpb.vault.crypto.wiping
 import com.fpb.vault.ui.components.FpbTopBar
 import com.fpb.vault.ui.components.GroupDivider
 import com.fpb.vault.ui.components.NoticeTone
@@ -150,7 +152,27 @@ fun SettingsScreen(state: VaultAppState) {
 
     val isDecoy = state.session.isDecoy
     val availability = remember { state.biometric.availability() }
-    val storageBytes = remember(state.notes) { state.storageBytes() }
+
+    // 硬件密钥实际落在哪一级保护里。只在"开关状态可能变"时重读一次 ——
+    // 这是一次 Keystore 查询，不该每帧都做（`biometricEnabled` 变了才可能有新密钥）。
+    // 读回来的值用于如实说明，尤其是 SOFTWARE 那一档：那意味着密钥没被硬件守着，
+    // 用户有权知道。
+    val keyGuard = remember(state.biometricEnabled) {
+        state.biometric.enrollmentSpec()?.guard
+    }
+
+    // 存储这三行共用一个刷新计数，**缺一不可**。
+    //
+    // 第二个键不能省：清理无用附件时一条笔记都没改，只看 notes 的话清完还是旧数字，
+    // 看起来像"清理没生效"。而**三行都必须带上它**：总数与明细是"和"的关系，
+    // 只有明细变、总数不变，用户会看到总数纹丝不动而下面几项一起变小 ——
+    // 明细加起来跟总数对不上，一个自相矛盾的界面比两个都停在旧值更不可信。
+    var storageRefresh by remember { mutableStateOf(0) }
+    val storageBytes = remember(state.notes, storageRefresh) { state.storageBytes() }
+    // 占用明细要扫一遍附件目录、并为每个文件读一次块头，所以只在"库内容变了"或
+    // "手动清理过"之后重算。
+    val usage = remember(state.notes, storageRefresh) { state.storageUsage() }
+    val cacheBytes = remember(state.notes, storageRefresh) { state.bitmapCacheBytes() }
 
     Column(Modifier.fillMaxSize()) {
         FpbTopBar(
@@ -193,6 +215,15 @@ fun SettingsScreen(state: VaultAppState) {
 
             SectionHeader("安全")
 
+            if (!isDecoy && state.biometricReenrollNeeded) {
+                InlineNotice(
+                    text = "指纹解锁需要重新开启一次。为加固密钥保护，本版换了一把规格更严的密钥；" +
+                        "而密钥规格一旦生成就不能就地修改，只能换新的。重新开启即可，" +
+                        "库里的内容不会受任何影响。",
+                    tone = NoticeTone.INFO,
+                )
+            }
+
             SettingsGroupCard(Modifier.padding(horizontal = 16.dp)) {
                 ActionRow(
                     icon = Icons.Outlined.Key,
@@ -222,6 +253,13 @@ fun SettingsScreen(state: VaultAppState) {
                     )
                     GroupDivider()
                     ActionRow(
+                        icon = Icons.Outlined.History,
+                        title = "登录记录",
+                        subtitle = "谁在什么时候打开过这个库，包括用假密码进来的",
+                        onClick = { state.push(Route.LoginLog) },
+                    )
+                    GroupDivider()
+                    ActionRow(
                         icon = Icons.Outlined.ContentCopy,
                         title = "更换恢复码",
                         subtitle = "换完必须重新抄写一遍，旧恢复码立即失效",
@@ -240,8 +278,22 @@ fun SettingsScreen(state: VaultAppState) {
                         title = "生物识别解锁",
                         subtitle = when {
                             activity == null -> "当前环境不支持生物识别弹窗"
-                            availability == BiometricGate.Availability.READY ->
-                                "用指纹代替输入主密码（新增指纹后会自动失效，需要重新开启）"
+                            availability == BiometricGate.Availability.READY -> when (keyGuard) {
+                                // 只有这两档值得单独说：一档是比默认更好，一档是"说不准"。
+                                // TEE 是绝大多数机型的常态，多一句"由 TEE 保护"徒增噪音。
+                                //
+                                // SOFTWARE 这一档的文案**必须写成"无法确认"**：
+                                // 它的实际含义是"我们请求的规格里不含任何硬件要求
+                                // （API 26/27，或平台拒绝了更严的两档）"，
+                                // 而不是"平台报告密钥是纯软件实现"。
+                                // 写成"本机密钥未被安全硬件保护"是拿一句无法证实的话吓用户 ——
+                                // API 26+ 的设备基本都有 TEE，兜底档的密钥大概率也在里面。
+                                BiometricGate.KeyGuard.STRONGBOX ->
+                                    "用指纹代替输入主密码（密钥在独立安全芯片内，无法导出）"
+                                BiometricGate.KeyGuard.SOFTWARE ->
+                                    "用指纹代替输入主密码（注意：无法确认密钥受安全硬件保护）"
+                                else -> "用指纹代替输入主密码（新增指纹后会自动失效，需要重新开启）"
+                            }
                             availability == BiometricGate.Availability.NOT_ENROLLED ->
                                 "本机还没有录入指纹或人脸"
                             else -> "本机没有可用的强生物识别硬件"
@@ -327,15 +379,75 @@ fun SettingsScreen(state: VaultAppState) {
 
             SettingsGroupCard(Modifier.padding(horizontal = 16.dp)) {
                 KeyValueRow("占用空间", ImagePipeline.describeSize(storageBytes))
+
+                // ---- 明细 ----
+                // 各项相加就是上面那个总数：半截文件与未被引用的附件各占一行，
+                // 因此不会出现"总数比各项之和大一截、而用户不知道多的是什么"。
+                // 没有的那一类直接不显示 —— 一堆 "0 B" 会把真正要看的那行淹掉。
+                usage?.let { u ->
+                    GroupDivider()
+                    KeyValueRow(
+                        "记录",
+                        "${state.notes.size} 条 · ${ImagePipeline.describeSize(u.rowBytes)}",
+                    )
+                    if (u.photoCount > 0) {
+                        GroupDivider()
+                        KeyValueRow(
+                            "照片",
+                            "${u.photoCount} 张 · ${ImagePipeline.describeSize(u.photoBytes)}",
+                        )
+                    }
+                    if (u.videoCount > 0) {
+                        GroupDivider()
+                        KeyValueRow(
+                            "视频",
+                            "${u.videoCount} 段 · ${ImagePipeline.describeSize(u.videoBytes)}",
+                        )
+                    }
+                    if (u.orphanCount > 0) {
+                        GroupDivider()
+                        KeyValueRow(
+                            "未被引用的附件",
+                            "${u.orphanCount} 个 · ${ImagePipeline.describeSize(u.orphanBytes)}",
+                        )
+                    }
+                    // 与上面一行方向相反：那一类是文件多出来、白占空间；
+                    // 这一类是文件不见了 —— 记录里还引着它，点开却永远打不开。
+                    // 在此之前这件事在界面上没有任何地方提过，只能靠用户自己发现。
+                    val missing = u.missingPhotoCount + u.missingVideoCount
+                    if (missing > 0) {
+                        GroupDivider()
+                        KeyValueRow("找不到的附件", "$missing 个 · 已打不开")
+                    }
+                    if (u.tempBytes > 0) {
+                        GroupDivider()
+                        KeyValueRow("未写完的文件", ImagePipeline.describeSize(u.tempBytes))
+                    }
+                }
+                if (cacheBytes > 0) {
+                    GroupDivider()
+                    KeyValueRow("图片缓存（内存）", ImagePipeline.describeSize(cacheBytes.toLong()))
+                }
+
+                // 库状态：解锁时那份加载报告的结果。平时是"正常"，
+                // 有问题时这里与首页顶部那条告警说的是同一件事 —— 但首页的告警
+                // 会被后来的操作冲掉，这里只要没重新解锁就一直挂着。
                 GroupDivider()
-                KeyValueRow("记录条数", "${state.notes.size} 条")
+                KeyValueRow(
+                    "库状态",
+                    if (state.loadProblemCount == 0) "正常" else "有 ${state.loadProblemCount} 条异常",
+                )
+
                 GroupDivider()
                 ActionRow(
                     icon = Icons.Outlined.CleaningServices,
                     title = "清理无用图片",
-                    subtitle = "删除条目时没删干净的图片密文会一直占着空间",
+                    subtitle = "删记录时没清干净、或写入中断留下的密文会一直占着空间",
                     onClick = {
                         val removed = state.purgeOrphanBlobs()
+                        // 目录变了，明细就得重算 —— 这一步没有任何一条笔记被改动，
+                        // 只靠 notes 驱动的 remember 是刷不出来的。
+                        storageRefresh++
                         state.setMessage(
                             if (removed == 0) "没有发现无用图片" else "已清理 $removed 个无用的图片文件",
                         )
@@ -722,10 +834,10 @@ private fun ChangePasswordDialog(
                     if (error != null) return@TextButton
                     submitting = true
                     scope.launch {
-                        val result = state.changeMasterPassword(
-                            current.toCharArray(),
-                            next.toCharArray(),
-                        )
+                        // 两段密码副本都限制在这个表达式里，退出即清零（含抛异常路径）。
+                        val result = current.toCharArray().wiping { c ->
+                            next.toCharArray().wiping { n -> state.changeMasterPassword(c, n) }
+                        }
                         submitting = false
                         if (result == null) {
                             onDismiss()
@@ -792,6 +904,9 @@ private fun DecoyPasswordDialog(
                         error = "假密码至少 ${VaultKeyring.MIN_PASSWORD_LENGTH} 位"
                         return@TextButton
                     }
+                    // 这里的数组所有权交给 onConfirm（同步调用），清零由消费方负责
+                    // —— 见 `SettingsDialog.EnableDecoy` 分支里的 wiping。
+                    // 这是全工程唯一不就地 wiping 的凭据转换点，security-selfcheck.py 里备案。
                     onConfirm(decoy.toCharArray())
                 },
             ) { Text("开启") }
@@ -1122,7 +1237,8 @@ private fun WipeDialog(
                 onClick = {
                     submitting = true
                     scope.launch {
-                        val ok = state.verifyCurrentPassword(password.toCharArray())
+                        val ok = password.toCharArray()
+                            .wiping { chars -> state.verifyCurrentPassword(chars) }
                         submitting = false
                         if (!ok) {
                             error = "密码不正确"

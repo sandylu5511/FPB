@@ -2,7 +2,9 @@ package com.fpb.vault.vault
 
 import com.fpb.vault.crypto.VaultKeyFileCodec
 import com.fpb.vault.crypto.VaultKeyFileException
+import com.fpb.vault.data.ChunkedBlobFormat
 import com.fpb.vault.data.RowIds
+import com.fpb.vault.model.NotePayload
 import com.fpb.vault.session.VaultSession
 import java.io.File
 import java.io.IOException
@@ -57,10 +59,41 @@ object BackupManager {
     private const val DB_ENTRY = StorageNames.BACKUP_DB_ENTRY
     private const val BLOB_PREFIX = StorageNames.BACKUP_BLOB_PREFIX
 
-    /** 单次导入允许解压的总字节数：防"压缩炸弹"把手机存储塞满。 */
-    private const val MAX_TOTAL_BYTES = 4L * 1024 * 1024 * 1024
+    /**
+     * 单个条目允许解压出的最大字节数。
+     *
+     * **由应用自己能产出的最大附件推导，而不是另写一个数字。**
+     * 原来是硬编码的 256 MiB（按图片时代的量级定的：单张图片上限 32 MiB，
+     * 256 MiB 已经宽松得多）。视频把它抬到了 2 GiB，而这个数没有被一起改 ——
+     * 于是**一段 400 MB 的手机 4K 视频就足以让整份备份恢复失败**。
+     *
+     * 这类缺陷的形状很难自己暴露出来：导出照常成功、提示照常说"已导出备份"，
+     * 直到某天真的需要它的时候才发现这份备份恢复不了 —— 而那时原始数据
+     * 大概率已经不在了。所以这里的取值必须能从 [VaultSession.MAX_VIDEO_PLAINTEXT_BYTES]
+     * **推出来**，而不是靠人记得同步改两处。
+     */
+    internal val MAX_ENTRY_BYTES: Long =
+        ChunkedBlobFormat.headerOf(VaultSession.MAX_VIDEO_PLAINTEXT_BYTES).expectedStoredBytes()
+
+    /**
+     * 单次导入允许解压的总字节数。
+     *
+     * 同样是推导出来的：按"两条装满上限视频的记录"给足
+     * （[com.fpb.vault.model.NotePayload.MAX_VIDEOS] 段满上限视频 × 2）。
+     *
+     * ## 它挡的是什么，以及不挡什么
+     *
+     * 它挡的是"一个声明了 1 TB 的构造包"。它**不**负责精确的容量规划 ——
+     * 真实设备上先被撞到的通常是**可用空间**：解压要落进 cache，
+     * 装不下时文件系统自己会失败，而 `finally` 会把暂存目录清掉。
+     * 因此这里的原则是"**有限、且不小于应用自己允许存的量**"，而不是越小越好：
+     * 任何比它小的取值都可能拒绝一份合法备份，而这正是本轮修的缺陷本身。
+     */
+    internal val MAX_TOTAL_BYTES: Long =
+        MAX_ENTRY_BYTES * (NotePayload.MAX_VIDEOS.toLong() * 2)
+
+    /** 备份包里的条目数上限。防一份声明了几十万条目的包把解压变成一次拒绝服务。 */
     private const val MAX_ENTRIES = 200_000
-    private const val MAX_ENTRY_BYTES = 256L * 1024 * 1024
 
     /**
      * 清单文件允许的最大字节数。
@@ -197,6 +230,10 @@ object BackupManager {
      *
      * 全程走暂存目录：先解压到 cache 里校验，**校验通过之后才动现有数据**。
      * 校验失败时现有库一个字节都没变，用户可以直接重试另一个包。
+     *
+     * 解压前会按暂存目录的**可用空间**先拒一次（见 [extract] 的 `usableBytes`）——
+     * 固定预算（[MAX_TOTAL_BYTES] ≈ 80 GiB）在手机上永远大于真实可用空间，
+     * 所以现实里第一个撞上的闸门就是它。
      */
     fun restore(repository: VaultRepository, input: InputStream): BackupInfo {
         check(!repository.session().isUnlocked) { "恢复备份必须在锁定状态下进行" }
@@ -206,7 +243,18 @@ object BackupManager {
         if (!staging.mkdirs()) throw BackupException("无法创建暂存目录")
 
         try {
-            extract(input, staging)
+            // 按暂存目录的可用空间预检，放在解压**之前**：一旦开始写，被填满的
+            // 不只是这个暂存目录，而是整个 cache 分区 —— 到那时连"空间不足"
+            // 这句提示都可能因为日志与界面写不进去而落不了地。
+            //
+            // 只传可用空间、不动 `maxTotalBytes`：两个闸门各有各的话术，
+            // 一份构造出来的 80 GiB 巨包应当被报成"包有问题"而不是"你空间不够"
+            // （判定顺序在 [extract] 里保证了这一点）。
+            //
+            // `usableSpace` 读不到时返回 0，而 0 表示"这项不检查" ——
+            // 宁可放过一次预检（文件系统自己会失败），也不要因为读不到余量
+            // 就把一份正常的备份判死。
+            extract(input, staging, usableBytes = staging.usableSpace)
 
             val stagedKey = File(staging, KEY_ENTRY)
             val stagedDb = File(staging, DB_ENTRY)
@@ -243,7 +291,41 @@ object BackupManager {
         }
     }
 
-    private fun extract(input: InputStream, staging: File) {
+    /**
+     * 解压到暂存目录。
+     *
+     * 三个上限做成参数（而非直接读常量）**只为了能被单测钉住边界**：
+     * 与 [buildManifest] 抽成独立函数是同一个理由 —— 用真实上限去测，
+     * 一次用例就得写几百 MB 到磁盘，而这里要验的是"比较用的是不是这个上限"。
+     *
+     * ## 三个闸门挡的不是同一件事，所以话术必须不一样
+     *
+     * | 闸门 | 挡的是什么 | 用户该做什么 |
+     * |---|---|---|
+     * | [maxEntryBytes] | 单个文件被撑爆（构造出来的包） | 这份包不可信 |
+     * | [maxTotalBytes] | 总量被撑爆（同上） | 同上 |
+     * | [usableBytes] | **本机磁盘装不下**（完全正常的包） | 清点空间再来一次 |
+     *
+     * 前两个是"包有问题"，第三个是"机器有问题"。这三处原先共用一句
+     * 「备份包解压后体积异常，已中止」，于是**拿着一条完全正常的备份包的用户，
+     * 被告知"包坏了"** —— 他会去重下、换网盘再传，怎么试都不会成功。
+     *
+     * ## 判定的先后顺序也是有意的
+     *
+     * 先判两个"包的问题"，再判"机器的问题"。反过来的话，一份被构造出来的巨包
+     * 会被报成"空间不足"，而用户去清空间是永远解决不了它的。
+     *
+     * @param usableBytes 暂存目录所在分区的可用空间。**0 = 不做这项检查**
+     *   （内存实现、以及读不到可用空间的情况）。它是**取值那一刻**的余量，
+     *   解压期间别的进程也会占盘，所以这是一道"提前拒绝"，不是精确预算。
+     */
+    internal fun extract(
+        input: InputStream,
+        staging: File,
+        maxEntryBytes: Long = MAX_ENTRY_BYTES,
+        maxTotalBytes: Long = MAX_TOTAL_BYTES,
+        usableBytes: Long = 0L,
+    ) {
         var total = 0L
         var count = 0
         ZipInputStream(input.buffered()).use { zip ->
@@ -267,6 +349,16 @@ object BackupManager {
                         }
                         else -> null
                     }
+                    // 清单单独封一条更紧的线：正常流程里 [inspect] 会先按
+                    // [MAX_MANIFEST_BYTES] 把它拦掉，但"绕过确认页直接恢复"这条路
+                    // 够不到那道闸门。而清单是**唯一会被整体读进内存**的条目
+                    // （其余条目解压时只是流过缓冲区），不封顶就留了一个撑爆堆的口子。
+                    val entryLimit =
+                        if (name == MANIFEST_ENTRY) {
+                            minOf(maxEntryBytes, MAX_MANIFEST_BYTES.toLong())
+                        } else {
+                            maxEntryBytes
+                        }
                     if (target != null) {
                         target.parentFile?.mkdirs()
                         var entryBytes = 0L
@@ -277,8 +369,19 @@ object BackupManager {
                                 if (read <= 0) break
                                 entryBytes += read
                                 total += read
-                                if (entryBytes > MAX_ENTRY_BYTES || total > MAX_TOTAL_BYTES) {
-                                    throw BackupException("备份包解压后体积异常，已中止")
+                                if (entryBytes > entryLimit) {
+                                    throw BackupException(
+                                        "备份包里有单个文件解压后体积异常，已中止",
+                                    )
+                                }
+                                if (total > maxTotalBytes) {
+                                    throw BackupException("备份包解压后的总体积异常，已中止")
+                                }
+                                if (usableBytes > 0 && total > usableBytes) {
+                                    throw BackupException(
+                                        "本机可用空间不足，解不开这份备份。" +
+                                            "先腾出一些空间再试 —— 这份备份本身没有问题。",
+                                    )
                                 }
                                 out.write(buffer, 0, read)
                             }

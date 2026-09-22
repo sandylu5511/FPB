@@ -9,7 +9,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.graphics.PathParser
+import com.fpb.vault.ui.theme.BrandBlue
+import com.fpb.vault.ui.theme.BrandGradientStops
+import com.fpb.vault.ui.theme.BrandLime
+import com.fpb.vault.ui.theme.BrandMint
 import kotlin.math.min
 
 /**
@@ -134,8 +139,20 @@ private fun gradientOf(colors: IntArray) = LinearGradient(
     INK_WIDTH,
     0f,
     colors,
-    floatArrayOf(0f, 0.48f, 1f),
+    // 停色位置取自 ui/theme/Color.kt 的那一份，不在这里再写一遍 0 / 0.48 / 1。
+    BrandGradientStops,
     Shader.TileMode.CLAMP,
 )
 
-private val DEFAULT_COLORS = intArrayOf(0xFFE6FF4F.toInt(), 0xFF7FE3C2.toInt(), 0xFF559CF0.toInt())
+/**
+ * 默认颜色取自品牌色常量，而不是在这里再抄一遍十六进制。
+ *
+ * 这几个数原先是在这里硬编码的，与 ui/theme/Color.kt 的 [BrandLime] / [BrandMint] /
+ * [BrandBlue] 是同一组颜色的两次写法 —— 改品牌色时漏掉这一处，字标就会和界面
+ * 其余部分**对不上色**，而这种偏差不容易一眼看出来。
+ */
+private val DEFAULT_COLORS = intArrayOf(
+    BrandLime.toArgb(),
+    BrandMint.toArgb(),
+    BrandBlue.toArgb(),
+)

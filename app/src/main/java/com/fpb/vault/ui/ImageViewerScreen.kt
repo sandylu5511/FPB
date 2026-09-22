@@ -510,6 +510,16 @@ private fun VideoPage(
                                         playback.started = false
                                         playback.completed = false
                                         playback.videoAspect = aspect
+                                        // 把上一次的现场交给新播放器：`prepare` 完成后由
+                                        // applyPendingSeek 落下去（落在那之前是无效的）。
+                                        // 落过就清掉 —— 只接一次茬，以后每次重建都把用户拽回
+                                        // 这个位置就不叫"恢复"了。界面读数也跟着回到这里，
+                                        // 否则控制条会先显示 0:00 再跳回去。
+                                        if (playback.resumePositionMs >= 0) {
+                                            playback.pendingSeekMs = playback.resumePositionMs
+                                            playback.resumePositionMs = -1L
+                                            positionMs = playback.pendingSeekMs
+                                        }
                                         // 已经 prepared 过就不必等（重建场景下 prepare 可能已完成）
                                         if (playback.startIfReady()) playing = true
                                     } else {
@@ -530,6 +540,14 @@ private fun VideoPage(
                                 }
 
                                 override fun surfaceDestroyed(surfaceHolder: SurfaceHolder) {
+                                    // 先把"现场"记下来 —— 这一刻播放器还活着，位置读得到。
+                                    // 切后台再回来时 Surface 会重建、播放器会换成新的，
+                                    // 新播放器的原点在 0：不记这一次位置，用户回来只能从头看。
+                                    // 读失败就记 -1（下一个播放器照常从头开始），不硬凑。
+                                    val live = playback.player?.let { p ->
+                                        runCatching { p.currentPosition.toLong() }.getOrNull()
+                                    }
+                                    playback.resumePositionMs = live ?: -1L
                                     playback.player?.let { runCatching { it.release() } }
                                     playback.player = null
                                     playback.prepared = false
@@ -588,10 +606,14 @@ private fun VideoPage(
 /**
  * 视频播放器的持有者。
  *
- * 与 [PlayerHolder] 分开，是因为这里要多管一件事：**用户意图**。
+ * 与 [PlayerHolder] 分开，是因为这里要多管两件事：**用户意图**与**现场**。
  * 实况照片那条路是"打开即播、没有控制条"，`startIfReady` 里没有任何意图要判断；
  * 而视频这条路上，Surface 重建（切后台再回来、锁屏解锁）会重新走一遍 `surfaceCreated`，
  * [wantsPlay] 就是"别把用户暂停过的视频又自动播起来"的那一个字段。
+ *
+ * 另一半是"播到哪"：[surfaceDestroyed] 会把当时的位置记进 [resumePositionMs]，
+ * [surfaceCreated] 再把它交给新播放器。少了这一步，用户切出去回个消息回来，
+ * 视频会从 0 重新开始（v1.1.0 验收抓到的那条 FAIL）。
  */
 private class VideoHolder {
     var player: MediaPlayer? = null
@@ -615,6 +637,19 @@ private class VideoHolder {
 
     /** 还没生效的定位（毫秒）；负数表示没有。`prepare` 之前 `seekTo` 是无效的。 */
     var pendingSeekMs = -1L
+
+    /**
+     * Surface 被销毁那一刻的"现场"（毫秒）；负数表示没有待恢复的现场。
+     *
+     * 与 [pendingSeekMs] 分开是有意的：那个是"用户刚拖到哪、等播放器准备好再落"，
+     * 由控制条的 `onSeek` 写入；这个是"上一个 Surface 拆掉时播到哪、
+     * 下一个播放器要接上"，由 `surfaceDestroyed` 写入。混成一个字段的话，
+     * "一边拖进度条一边切后台"就会互相覆盖。
+     *
+     * 位置从**那个还活着的播放器**上读，而不是读界面上的 `positionMs`：
+     * 暂停状态下拖动进度条，界面那个值是不跟的，而且它每 250ms 才刷一次。
+     */
+    var resumePositionMs = -1L
 
     /**
      * 能不能开播：要**已经 prepare**、用户没按过暂停、还没启动过，
@@ -655,6 +690,8 @@ private class VideoHolder {
         prepared = false
         started = false
         completed = false
+        // 离开这一页就是"现场作废"：留着的话，下次打开同一个视频会平白定位到上次的位置。
+        resumePositionMs = -1L
     }
 }
 

@@ -288,17 +288,23 @@ fun InlineNotice(
 enum class NoticeTone { WARNING, INFO }
 
 /**
- * 语义色：成功 / 危险。
+ * 语义色：成功。
  *
- * 这两档**必须跟着主题走**。固定色在浅色下没问题，但放到深色主题的近黑底（#0A0D12）上，
+ * 它**必须跟着主题走**。固定色在浅色下没问题，但放到深色主题的近黑底（#0A0D12）上，
  * `#1F9D62` 的对比度只剩 2.9:1 —— 属于"能看见但读不清"，正是深色模式那批问题的同类。
  * 深色档取同一色相、只提明度，让语义在两套主题里保持一致。
  *
  * 判据是 [LocalIsDarkTheme]（应用实际在用的那套配色），**不是** `isSystemInDarkTheme()`：
  * 用户在系统浅色下把应用切成深色时，后者仍是 false，这里就会取错档。
+ *
+ * ## "危险"那一档为什么不在这里
+ *
+ * 这里原先还有一个 `DangerRed`，与配色方案里的 `error` 是**同一色相的两次实现**
+ * （浅色值一字不差，深色值略有出入），而全工程十几处"危险/删除"文案用的都是
+ * `MaterialTheme.colorScheme.error`。于是那个常量既没人读，又是一份会随主题
+ * 慢慢漂开的第二事实 —— 已删除，危险色直接用 `colorScheme.error`：
+ * 它在 [com.fpb.vault.ui.theme.LightColors] / `DarkColors` 里各自取过档，
+ * 同样跟着主题走，不需要在组件层再判一次明暗。
  */
 val SuccessGreen: Color
     @Composable get() = if (LocalIsDarkTheme.current) Color(0xFF3DD68C) else Color(0xFF1F9D62)
-
-val DangerRed: Color
-    @Composable get() = if (LocalIsDarkTheme.current) Color(0xFFFF7B72) else Color(0xFFC0392B)

@@ -103,6 +103,19 @@ class FileBlobStore(private val rootDir: File) : BlobSink {
     override fun totalBytes(): Long =
         rootDir.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L
 
+    /** 单个附件的占盘字节。走 [fileFor] 而不是自己拼路径 —— 那道 blobId 校验不能绕。 */
+    override fun sizeOf(blobId: String): Long {
+        if (!RowIds.isValid(blobId)) return 0L
+        val file = File(rootDir, blobId)
+        return if (file.isFile) file.length() else 0L
+    }
+
+    /** 半截文件的占用。与 [purgeStaleTempFiles] 认的是同一批文件（同一个后缀常量）。 */
+    override fun staleTempBytes(): Long =
+        rootDir.listFiles()?.sumOf {
+            if (it.isFile && it.name.endsWith(TEMP_SUFFIX)) it.length() else 0L
+        } ?: 0L
+
     // ==================== 分块格式（视频） ====================
 
     /**
@@ -142,17 +155,29 @@ class FileBlobStore(private val rootDir: File) : BlobSink {
             var storedSize = ChunkedBlobFormat.HEADER_BYTES.toLong()
 
             RandomAccessFile(temp, "rw").use { raf ->
+                // 先截断到零。`"rw"` **不会**清掉一个已存在的同名文件，而上一次写入
+                // 被强杀（OOM、划掉任务）会漏下一个 `<blobId>.part`：这次的新内容若比
+                // 它短，旧字节就残留在尾部，文件比头部声称的长度长 —— 长度校验不通过，
+                // 这个附件**永远读不出来**，而导入那一步报的是成功。
+                // 启动时的 [purgeStaleTempFiles] 通常已经删掉它了，但"通常"不是"一定"。
+                raf.setLength(0)
                 raf.write(ByteArray(ChunkedBlobFormat.HEADER_BYTES))
 
-                val pending = ByteArray(chunkSize)
+                var pending = ByteArray(chunkSize)
+                // 第二块缓冲。**两块轮换、而不是每轮新建一个**：
+                // 一段 2 GiB 的视频有 2048 块，每轮 new 一个 1 MiB 的数组等于让 GC
+                // 跟着整段写入一路抖动 —— 而这些垃圾一个字节都不产出。
+                // 原来这里确实是每轮 new（注释却写着"交换缓冲而不新建"），
+                // 注释描述的是意图，代码做的是另一件事。
+                var spare = ByteArray(chunkSize)
                 var pendingLength = readUpTo(source, pending, chunkSize)
 
                 while (pendingLength > 0) {
                     // 先判上限再加密：超限的字节不该被加密、更不该落盘。
                     if (plainSize + pendingLength > limitBytes) throw BlobTooLargeException(limitBytes)
 
-                    val next = ByteArray(chunkSize)
-                    val nextLength = readUpTo(source, next, chunkSize)
+                    // 超前读一块，写进闲置的那块缓冲；读空了，手上这块就是末块。
+                    val nextLength = readUpTo(source, spare, chunkSize)
                     val isLast = nextLength <= 0
 
                     val sealed = seal(chunkCount, pending, pendingLength, isLast)
@@ -162,10 +187,13 @@ class FileBlobStore(private val rootDir: File) : BlobSink {
                     storedSize += sealed.nonce.size + sealed.ciphertext.size
                     chunkCount++
 
-                    // 这一轮用过的 pending 变成下一轮的 next。交换缓冲而不新建，
-                    // 是为了让峰值稳定在两块 —— 每次迭代都 new 一个的话，
-                    // GC 会跟着一个几百 MB 的视频一路抖动。
-                    System.arraycopy(next, 0, pending, 0, nextLength)
+                    // 换名而不是拷贝：刚封好的那块腾出来当下一轮的落点。
+                    // 换过去的 spare 里可能留着上一轮更长的尾巴，但 seal 只取
+                    // `length` 个字节（见 VaultSession.putVideo 里的 plain.copyOf(length)），
+                    // 块边界因此与"每轮新建"完全一致。
+                    val used = pending
+                    pending = spare
+                    spare = used
                     pendingLength = nextLength
                 }
 

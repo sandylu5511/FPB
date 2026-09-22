@@ -1,5 +1,7 @@
 package com.fpb.vault.crypto
 
+import androidx.annotation.VisibleForTesting
+
 /**
  * Crockford Base32 编解码。
  *
@@ -119,7 +121,16 @@ object Base32Crockford {
 
     fun isValid(text: String): Boolean = decodeOrNull(text) != null
 
-    /** 校验字符是否在字母表内（不含容错映射）。 */
+    /**
+     * 校验字符是否全部在字母表内（**不含**容错映射：`I`/`L`/`O` 在这里不算合法）。
+     *
+     * [isValid] 走的是解码，因此会接受那些容错字符；这个函数问的是另一个问题：
+     * "这串东西是不是我们自己生成的规范形式"。生产代码不调它 ——
+     * 它服务的是两组断言：`RecoveryCodeTest` 用来钉住"生成器只产出规范字符"，
+     * `Base32CrockfordTest` 用来钉住"非法字符不会被误判为规范"。
+     * 去掉它，这两条就只能改成各自重写一遍字母表查找，反而多出两份事实。
+     */
+    @VisibleForTesting
     fun isCanonical(text: String): Boolean {
         if (text.isEmpty()) return false
         return text.all { c -> c.code < 128 && ALPHABET.indexOf(c) >= 0 }

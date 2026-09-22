@@ -82,6 +82,49 @@ class FileBlobStoreChunkedTest {
         dir.listFiles()?.filter { it.name.endsWith(FileBlobStore.TEMP_SUFFIX) }?.map { it.name }
             ?: emptyList()
 
+    // ==================== 写入前的截断 ====================
+
+    /**
+     * 写入前必须把临时文件截断到零。
+     *
+     * 缺陷：`RandomAccessFile(temp, "rw")` **不会**清掉一个已存在的同名文件。
+     * 上一次写入被强杀（OOM、划掉任务、系统回收）会漏下一个 `<blobId>.part`，
+     * 这次的新内容若比它短，旧字节就残留在尾部 —— 文件比头部声称的长度长，
+     * [FileBlobStore.chunkHeader] 的长度校验不通过，于是这个附件**永远读不出来**：
+     * 加密从头开始覆盖，内容其实是对的，只是尾巴多了一截旧数据。
+     *
+     * 而写入那一步报的是**成功**。用户会看到"已添加 1 段视频"，
+     * 点开却是一片黑 —— 且怎么重试都一样。
+     *
+     * 启动时的 `purgeStaleTempFiles()` 通常会删掉那种残留，但"通常"不是"一定"。
+     */
+    @Test
+    fun `残留的半截临时文件不会让新写入的附件变成读不出来`() {
+        val blobId = "e".repeat(32)
+        // 造一个比这次要写的内容**长得多**的残留，模拟上次被强杀时留下的尾巴。
+        val stale = File(dir, blobId + FileBlobStore.TEMP_SUFFIX)
+        RandomAccessFile(stale, "rw").use { it.write(ByteArray(cs * 4 + 777)) }
+
+        val plain = bytes(cs + 33, seed = 5L)
+        write(blobId, plain)
+
+        assertEquals("残留的临时文件写完之后不该还在", emptyList<String>(), tempFiles())
+        val header = store.chunkHeader(blobId)
+        assertNotNull(
+            "长度对不上时这里会是 null —— 那正是缺陷的表现：文件比头部声称的长，" +
+                "于是这个附件永远读不出来",
+            header,
+        )
+        assertEquals(
+            "落盘长度必须正好是头部 + 各块",
+            header!!.expectedStoredBytes(),
+            File(dir, blobId).length(),
+        )
+        store.openChunked(blobId, opener(blobId))!!.use {
+            assertArrayEquals("内容也要完整读回", plain, readAll(it))
+        }
+    }
+
     // ==================== 正常路径 ====================
 
     @Test

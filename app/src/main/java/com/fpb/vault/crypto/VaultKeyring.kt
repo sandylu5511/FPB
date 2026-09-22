@@ -77,7 +77,9 @@ class VaultKeyring private constructor(
      */
     fun unlockWithRecoveryCode(code: String): VaultDek? {
         val canonical = RecoveryCode.canonicalize(code) ?: return null
-        val kek = Argon2Kdf.derive(canonical.toCharArray(), params)
+        // `wiping` 把"派生用的那份字符数组"限制在这一个表达式里：`wiping` 返回之后
+        // 数组已被清零。canonical 本身是个 String，清不掉 —— 这一点见 SecretChars 的说明。
+        val kek = canonical.toCharArray().wiping { chars -> Argon2Kdf.derive(chars, params) }
         try {
             return unwrap(KeySlot.RECOVERY, kek, VaultDomain.REAL)
         } finally {
@@ -283,7 +285,7 @@ class VaultKeyring private constructor(
             canonicalCode: String,
             params: KdfParams,
         ): WrappedKey {
-            val kek = Argon2Kdf.derive(canonicalCode.toCharArray(), params)
+            val kek = canonicalCode.toCharArray().wiping { chars -> Argon2Kdf.derive(chars, params) }
             try {
                 return wrapDek(dek, kek, KeySlot.RECOVERY)
             } finally {

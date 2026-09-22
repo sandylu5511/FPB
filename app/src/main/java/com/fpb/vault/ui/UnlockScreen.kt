@@ -56,6 +56,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
+import com.fpb.vault.crypto.wiping
 import com.fpb.vault.ui.brand.FpbWordmark
 import com.fpb.vault.ui.components.InlineNotice
 import com.fpb.vault.ui.components.RestoreConfirmDialog
@@ -145,6 +146,18 @@ fun UnlockScreen(state: VaultAppState) {
                 text = "$boot\n如果本机的密钥文件已经损坏，可以用之前导出的备份包恢复" +
                     "（下方「导入备份」）。",
                 tone = com.fpb.vault.ui.components.NoticeTone.WARNING,
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+
+        // 换代之后指纹按钮会消失（`hasEnrollment()` 已经是 false）。
+        // 不给一句话的话，用户看到的现象就是"按钮不见了"，而设置页他也进不去
+        // —— 因为他还锁在外面。所以这句必须出现在解锁页上。
+        if (state.biometricReenrollNeeded) {
+            InlineNotice(
+                text = "指纹解锁需要重新开启一次（本次升级加强了密钥保护）。" +
+                    "用主密码进入后，到设置里重新打开即可。",
+                tone = com.fpb.vault.ui.components.NoticeTone.INFO,
             )
             Spacer(Modifier.height(12.dp))
         }
@@ -242,7 +255,11 @@ fun UnlockScreen(state: VaultAppState) {
             Button(
                 onClick = {
                     scope.launch {
-                        when (val feedback = state.unlockWithPassword(password.toCharArray())) {
+                        // 密码副本在 `wiping` 退出时（无论成功、失败还是抛异常）就被清零，
+                        // 不留在堆上等 GC —— 见 SecretChars 的说明。
+                        val feedback = password.toCharArray()
+                            .wiping { chars -> state.unlockWithPassword(chars) }
+                        when (feedback) {
                             is VaultAppState.UnlockFeedback.Failure -> {
                                 error = feedback.message
                                 failures += 1
@@ -334,9 +351,4 @@ fun UnlockScreen(state: VaultAppState) {
 private fun cooldownFor(failures: Int): Int = when {
     failures < 5 -> 0
     else -> min(30, (failures - 4) * 5)
-}
-
-private fun formatTime(millis: Long): String {
-    if (millis <= 0) return "未知"
-    return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
 }

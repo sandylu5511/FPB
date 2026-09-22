@@ -24,6 +24,12 @@ package com.fpb.vault.vault
  * - 这里的值**只能新增，不能改**。真要改就必须先写"读到旧名字就迁移到新名字"的逻辑，
  *   并且为它补一条回归测试。
  * - 任何新加的落盘名称也要放进来，由 `StorageNamesTest` 钉住字面量。
+ *
+ * 上面第一条**已经被真实执行过一次**：`BIOMETRIC_KEY_ALIAS` 从 `fpb.biometric.v1`
+ * 换成 `.v2`。配套做齐了三件事 —— 旧值原样保留在 [BIOMETRIC_KEY_ALIAS_RETIRED_V1]、
+ * 迁移逻辑在 `BiometricGate.retireLegacyEnrollment()`、回归测试在 `StorageNamesTest`
+ * 与 `BiometricGateInstrumentedTest`。这是一条可以照抄的模板，
+ * 也是"改名字"与"直接删掉旧名字"之间的分界线。
  */
 internal object StorageNames {
 
@@ -51,13 +57,31 @@ internal object StorageNames {
     const val BIOMETRIC_WRAP_FILE = "bio_wrap.bin"
 
     /**
-     * Keystore 里的密钥别名。
+     * Keystore 里的密钥别名（**当前一代**）。
      *
-     * 带 `.v1` 是**故意**的：将来若要换一套包裹方案，别名换成 `.v2` 即可与旧的并存，
-     * 老用户开一次生物识别就平滑迁移；沿用同名则会把旧密钥覆盖掉，
-     * 而那意味着他们的生物识别入口失效。
+     * `v1 → v2` 换代的理由：密钥规格一旦生成就改不了（`BiometricGate.secretKey`
+     * 命中已有别名就直接复用旧密钥），所以"要求 StrongBox、要求设备未锁定"
+     * 这些加固只对新生成的密钥有效。要让存量用户也拿到，只能换一代别名。
+     *
+     * **代价是用户必须重新启用一次生物识别**，由
+     * `BiometricGate.retireLegacyEnrollment()` 在启动时执行，并如实告知用户。
+     * 不会造成数据损失：DEK 同时还被主密码槽与恢复码槽包裹着。
+     *
+     * `.v1` 那条"值只能新增不能改"的纪律针对的是**改掉一个还在用的名字**；
+     * 这里改的是"当前代是谁"，而旧名字被完整保留在
+     * [BIOMETRIC_KEY_ALIAS_RETIRED_V1] 里并由上面那段迁移逻辑读取 ——
+     * 这正是纪律里要求的做法。
      */
-    const val BIOMETRIC_KEY_ALIAS = "fpb.biometric.v1"
+    const val BIOMETRIC_KEY_ALIAS = "fpb.biometric.v2"
+
+    /**
+     * **已退役**的上一代别名。只为作废而保留，绝不能再拿它生成密钥。
+     *
+     * 它对应的密钥是用"没有 StrongBox、也没有设备未锁定要求"的规格生成的
+     * （1.1.4 及以前）。删掉这个常量会让 `retireLegacyEnrollment()` 失去判断依据，
+     * 存量用户就会被永久留在旧规格上 —— 那是这次加固最不该出现的结果。
+     */
+    const val BIOMETRIC_KEY_ALIAS_RETIRED_V1 = "fpb.biometric.v1"
 
     /** 明文偏好文件（`shared_prefs/fpb_settings.xml`）。 */
     const val PREFS_FILE = "fpb_settings"
@@ -113,6 +137,47 @@ internal object StorageNames {
 
         const val BIOMETRIC = "biometric_enabled"
 
+        /**
+         * "生物识别绑定被作废了，需要你重新启用一次"。
+         *
+         * 换代号（v1 → v2，见 [BIOMETRIC_KEY_ALIAS]）时置位，用户重新开启成功即清除。
+         *
+         * 这个标志不是装饰：没有它，用户看到的现象是"指纹解锁的按钮凭空消失了"，
+         * 而**没有任何地方解释它为什么消失** —— 对一个人来说，
+         * 设置自己变掉了、又查不出原因，比"提示我重新开一次"糟糕得多。
+         */
+        const val BIOMETRIC_REENROLL = "bio_reenroll_needed"
+
+        /**
+         * 当前这把生物识别密钥**生成时被平台接受的那一档加固规格**（枚举名）。
+         *
+         * ## 为什么必须把它落盘，而不是"用的时候去读回来"
+         *
+         * 因为**读不回来**。原设计想用 `KeyFactory.getKeySpec(secretKey, KeyInfo::class.java)`
+         * 把密钥的属性读回来（`isUserAuthenticationRequired`、`getSecurityLevel()` 等），
+         * 这条路的实现是 `readKeyInfo()`。实测（API 37 模拟器）：
+         *
+         * ```
+         * [provider] AndroidKeyStore 的 KeyFactory 已注册算法：EC, RSA, XDH, ED25519, ML-DSA…
+         * [provider] KeyFactory/AES -> NoSuchAlgorithmException
+         * ```
+         *
+         * **这个 provider 不注册 AES。** 所以对一把 AES 密钥，`KeyInfo` 这条路
+         * 不是"写错了算法名"，是**根本不存在**。真实后果不是崩溃，而是
+         * [BiometricGate.enrollmentSpec] 永远返回 null ——
+         * 于是设置页里"密钥在独立安全芯片内"与"本机密钥未被安全硬件保护"
+         * **两句话都不会出现**，而后者正是需要被看见的那一句。
+         *
+         * 换成落盘之后，这一项的来源要说清楚：它是
+         * **"生成时平台接受了这份规格"**，不是"从密钥上读回来确认生效"。
+         * 这个区分成立的前提是**平台对不支持的要求是抛异常、而不是静默忽略**
+         * （实测：没有录入生物识别时 `setUserAuthenticationRequired(true)`
+         * 直接抛 `InvalidAlgorithmParameterException`，而不是默默降级）。
+         * 唯一能绕过这个前提的情形是"平台声称支持 StrongBox 但静默忽略"，
+         * 那一项本项无法证明，已在 [BiometricGate.KeyGuard] 的 KDoc 里写明。
+         */
+        const val BIOMETRIC_KEY_TIER = "bio_key_tier"
+
         const val LAUNCHER_ALIAS = "launcher_alias"
 
         const val ONBOARDING = "onboarding_done"
@@ -136,5 +201,24 @@ internal object StorageNames {
 
         /** 外观模式：存字符串而不是序号，序号会随枚举重排而错位。 */
         const val THEME_MODE = "theme_mode"
+
+        /**
+         * 密码/恢复码输错的次数，与最后一次输错的时间。
+         *
+         * 这两个值**只能是明文**，而且这条路没有别的走法：解锁失败的那一刻，
+         * 手上还没有任何密钥（密码错的，所以派不出 KEK），密文无从谈起。
+         *
+         * 代价要说清楚：`shared_prefs` 是明文 XML，拿到设备文件的人能看出
+         * "这台设备在某个时刻被人反复试过"。泄漏的是**这件事本身** ——
+         * 不是密码，也不是任何一条内容。
+         *
+         * 键名刻意含糊（`attempt_*` 而不是 `wrong_password_*`）：键名越直白，
+         * 这句话越像"这里有个值得撬的东西"。这与 [SECONDARY_SLOT] 是同一条考虑。
+         *
+         * 它们只是**尚未记入账本的那几次**：下次成功解锁时会折成一条登录记录并清零，
+         * 于是明文里长期留着的只有空值。
+         */
+        const val ATTEMPT_COUNT = "attempt_count"
+        const val ATTEMPT_LAST_AT = "attempt_last_at"
     }
 }

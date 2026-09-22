@@ -12,12 +12,24 @@ val BrandLime = Color(0xFFE6FF4F)
 val BrandMint = Color(0xFF7FE3C2)
 val BrandBlue = Color(0xFF559CF0)
 
-/** LOGO 中三个停色的位置（与 SVG 的 offset 一致：0 / 0.48 / 1）。 */
-val BrandGradientStops = arrayOf(0f, 0.48f, 1f)
+/**
+ * LOGO 中三个停色的位置（与 SVG 的 offset 一致：0 / 0.48 / 1）。
+ *
+ * 类型取 [FloatArray] 而不是 `Array<Float>`，是为了让**两条画字标的路共用同一份数据**：
+ * [BrandGradient] 走 Compose 的 `Brush`，而
+ * [com.fpb.vault.ui.brand.FpbWordmark] 走原生 `LinearGradient`（为什么必须这样见那个文件），
+ * 后者的构造参数正是 `float[]`。各写一遍的话，"0 / 0.48 / 1" 就有两份，
+ * 改品牌停色时漏掉一处，两条路上的字标会**对不上**。
+ */
+val BrandGradientStops = floatArrayOf(0f, 0.48f, 1f)
 
 /** 字标用的水平渐变。见 [com.fpb.vault.ui.brand.FpbWordmark]。 */
 val BrandGradient = Brush.horizontalGradient(
-    colorStops = arrayOf(0f to BrandLime, 0.48f to BrandMint, 1f to BrandBlue),
+    colorStops = arrayOf(
+        BrandGradientStops[0] to BrandLime,
+        BrandGradientStops[1] to BrandMint,
+        BrandGradientStops[2] to BrandBlue,
+    ),
 )
 
 /**

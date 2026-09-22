@@ -3,6 +3,7 @@ package com.fpb.vault.vault
 import com.fpb.vault.data.SqliteRowStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,19 +43,34 @@ class StorageNamesTest {
         assertEquals("vault.db", StorageNames.DATABASE_FILE)
         assertEquals(".tmp", StorageNames.TEMP_SUFFIX)
         assertEquals("bio_wrap.bin", StorageNames.BIOMETRIC_WRAP_FILE)
-        assertEquals("fpb.biometric.v1", StorageNames.BIOMETRIC_KEY_ALIAS)
+        assertEquals("fpb.biometric.v2", StorageNames.BIOMETRIC_KEY_ALIAS)
         assertEquals("fpb_settings", StorageNames.PREFS_FILE)
     }
 
     /**
-     * 别名里的 `.v1` 不是装饰：将来换包裹方案时要用 `.v2` 与它并存，
-     * 直接改这个值会覆盖掉老用户的 Keystore 密钥、让他们的生物识别入口失效。
+     * 别名里的 `.v1` / `.v2` 不是装饰：换包裹方案时靠它与旧密钥并存。
+     *
+     * 这条测试**同时钉住两个方向**：
+     * - 当前别名必须带版本后缀（否则下次就没法再换代）；
+     * - 已退役的 `v1` **必须原样保留**。删掉它看起来像是"清理无用常量"，
+     *   实际后果是 `BiometricGate.retireLegacyEnrollment()` 失去判断依据，
+     *   存量用户被永久留在旧规格的密钥上 —— 而这件事没有任何症状。
      */
     @Test
-    fun `Keystore 别名必须带版本后缀_以便将来换方案时与旧密钥并存`() {
+    fun `Keystore 别名必须带版本后缀_且退役的上一代必须保留`() {
         assertTrue(
             "别名里应有版本后缀：${StorageNames.BIOMETRIC_KEY_ALIAS}",
             Regex("""\.v\d+$""").containsMatchIn(StorageNames.BIOMETRIC_KEY_ALIAS),
+        )
+        assertEquals("fpb.biometric.v1", StorageNames.BIOMETRIC_KEY_ALIAS_RETIRED_V1)
+        assertNotEquals(
+            "当前别名与退役别名不能是同一个 —— 否则换代逻辑会把自己的密钥删掉",
+            StorageNames.BIOMETRIC_KEY_ALIAS,
+            StorageNames.BIOMETRIC_KEY_ALIAS_RETIRED_V1,
+        )
+        assertTrue(
+            "当前别名的版本号必须高于退役的：${StorageNames.BIOMETRIC_KEY_ALIAS}",
+            StorageNames.BIOMETRIC_KEY_ALIAS > StorageNames.BIOMETRIC_KEY_ALIAS_RETIRED_V1,
         )
     }
 
@@ -85,6 +101,8 @@ class StorageNamesTest {
         assertEquals("auto_lock_millis", StorageNames.Pref.AUTO_LOCK)
         assertEquals("block_screenshots", StorageNames.Pref.BLOCK_SCREENSHOTS)
         assertEquals("biometric_enabled", StorageNames.Pref.BIOMETRIC)
+        assertEquals("bio_reenroll_needed", StorageNames.Pref.BIOMETRIC_REENROLL)
+        assertEquals("bio_key_tier", StorageNames.Pref.BIOMETRIC_KEY_TIER)
         assertEquals("launcher_alias", StorageNames.Pref.LAUNCHER_ALIAS)
         assertEquals("onboarding_done", StorageNames.Pref.ONBOARDING)
         assertEquals("slot_b_configured", StorageNames.Pref.SECONDARY_SLOT)
@@ -114,6 +132,8 @@ class StorageNamesTest {
             StorageNames.Pref.AUTO_LOCK,
             StorageNames.Pref.BLOCK_SCREENSHOTS,
             StorageNames.Pref.BIOMETRIC,
+            StorageNames.Pref.BIOMETRIC_REENROLL,
+            StorageNames.Pref.BIOMETRIC_KEY_TIER,
             StorageNames.Pref.LAUNCHER_ALIAS,
             StorageNames.Pref.ONBOARDING,
             StorageNames.Pref.SECONDARY_SLOT,

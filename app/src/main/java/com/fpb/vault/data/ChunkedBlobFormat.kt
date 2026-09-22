@@ -101,8 +101,14 @@ object ChunkedBlobFormat {
             }
         }
 
-        /** 除最后一块外，每块的明文长度都是 [chunkSize]。 */
-        val storedStride: Long get() = (AeadCipher.NONCE_BYTES + chunkSize + AeadCipher.TAG_BYTES).toLong()
+        /**
+         * 除最后一块外，每块在文件里占的字节数 = 明文块 + 固定开销。
+         *
+         * 开销走 [AeadCipher.OVERHEAD_BYTES] 一处，不在这里把 nonce 与 tag 再加一遍 ——
+         * 下面三处偏移算术原先各写了一份 `nonce + 明文 + tag`，改 nonce 或 tag 长度时
+         * 漏掉任何一处都是**静默的偏移错位**，要等画面读花了才会发现。
+         */
+        val storedStride: Long get() = (chunkSize + AeadCipher.OVERHEAD_BYTES).toLong()
 
         /** 第 [index] 块的明文长度（最后一块可能不满）。 */
         fun plainBytesOf(index: Int): Int {
@@ -121,13 +127,12 @@ object ChunkedBlobFormat {
         fun expectedStoredBytes(): Long {
             val full = (chunkCount - 1).toLong()
             val lastPlain = plainBytesOf(chunkCount - 1).toLong()
-            return HEADER_BYTES + full * storedStride +
-                (AeadCipher.NONCE_BYTES + lastPlain + AeadCipher.TAG_BYTES)
+            return HEADER_BYTES + full * storedStride + (lastPlain + AeadCipher.OVERHEAD_BYTES)
         }
 
         /** 解码第 [index] 块时需要从文件里读多少字节。 */
         fun storedBytesOf(index: Int): Int =
-            AeadCipher.NONCE_BYTES + plainBytesOf(index) + AeadCipher.TAG_BYTES
+            AeadCipher.OVERHEAD_BYTES + plainBytesOf(index)
 
         /** 末块之前的明文总量。块数与明文长度的自洽性已在 init 里保证，所以它恒 < plainSize。 */
         private fun plainBytesBeforeLast(): Long = (chunkCount - 1).toLong() * chunkSize

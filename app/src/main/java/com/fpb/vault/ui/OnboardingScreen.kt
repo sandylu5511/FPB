@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import com.fpb.vault.crypto.CreationResult
 import com.fpb.vault.crypto.RecoveryCode
 import com.fpb.vault.crypto.VaultKeyring
+import com.fpb.vault.crypto.wiping
 import com.fpb.vault.ui.brand.FpbWordmark
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -146,10 +147,15 @@ fun OnboardingScreen(state: VaultAppState) {
                     working = true
                     step = 3
                     scope.launch {
-                        val result = state.createVault(
-                            primary.toCharArray(),
-                            if (decoyEnabled) decoy.toCharArray() else null,
-                        )
+                        // 两段密码副本都限制在这个表达式里：`wiping` 一退出就清零，
+                        // 包括 createVault 抛异常那条路径。见 SecretChars。
+                        val result = primary.toCharArray().wiping { p ->
+                            if (decoyEnabled) {
+                                decoy.toCharArray().wiping { d -> state.createVault(p, d) }
+                            } else {
+                                state.createVault(p, null)
+                            }
+                        }
                         created = result
                         working = false
                         if (result == null) {

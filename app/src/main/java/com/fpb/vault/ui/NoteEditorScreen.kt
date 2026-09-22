@@ -122,6 +122,7 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
     var body by remember { mutableStateOf(existing?.payload?.body.orEmpty()) }
     var tags by remember { mutableStateOf(existing?.tags.orEmpty()) }
     var tagDraft by remember { mutableStateOf("") }
+    var tagNotice by remember { mutableStateOf<String?>(null) }
     var favorite by remember { mutableStateOf(existing?.payload?.favorite ?: false) }
     var todos by remember { mutableStateOf(existing?.payload?.todos.orEmpty()) }
     var fields by remember { mutableStateOf(existing?.payload?.fields.orEmpty()) }
@@ -182,6 +183,12 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
                     existingVideos = existingVideos + outcome.video
                     importedVideoIds = importedVideoIds + outcome.video.blobId
                     touched = true
+                    // 大文件是这条路上最需要反馈的地方：选定之后要转上一会儿，
+                    // 转完必须有个"它进去了、有多大"的交代，否则用户不知道刚才那几秒
+                    // 到底成功了没有（视频是先落盘、保存时才有记录的）。
+                    state.setMessage(
+                        "已添加 1 段视频 · ${ImagePipeline.describeSize(outcome.plainBytes)}",
+                    )
                 }
                 is VideoImport.Rejected -> state.setMessage(outcome.message)
             }
@@ -304,6 +311,7 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
                 label = { Text("标题") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                supportingText = overLimitHint(title, NotePayload.MAX_TITLE_CHARS, "标题"),
             )
 
             bodyFor(
@@ -350,15 +358,25 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
                 tags = tags,
                 draft = tagDraft,
                 onDraftChange = { tagDraft = it },
+                // 判定与"要不要说话"都交给 `tagAddResult`（见 `ListAdd.kt`）。
+                //
+                // 原先这里是三个条件串成一个 if，紧跟一行**无条件**的 `tagDraft = ""`。
+                // 后果：标签已经满 32 个时、或者打的这个词已经存在时，
+                // 用户刚打好的字会被清掉、标签没多、界面**一句话不说** ——
+                // 他只能猜是不是自己没按到，然后再按一次，还是这样。
                 onAdd = {
-                    val clean = tagDraft.trim().take(NotePayload.MAX_TAG_CHARS)
-                    if (clean.isNotEmpty() && clean !in tags && tags.size < NotePayload.MAX_TAGS) {
-                        tags = tags + clean
+                    val r = tagAddResult(tagDraft, tags)
+                    r.value?.let {
+                        tags = tags + it
                         touched = true
                     }
-                    tagDraft = ""
+                    tagDraft = r.draftAfter
+                    tagNotice = r.notice
                 },
-                onRemove = { tags = tags - it; touched = true },
+                // 移除一个之后，"满了"这句话就不再成立 —— 顺手清掉，
+                // 免得用户删完一个还看着提示，以为得继续删。
+                onRemove = { tags = tags - it; touched = true; tagNotice = null },
+                notice = tagNotice,
             )
         }
 
@@ -453,6 +471,67 @@ fun NoteEditorScreen(state: VaultAppState, route: Route.Editor) {
 
 // ==================== 分类型正文区 ====================
 
+/**
+ * 「这个字段保存时会被截断」的提示。
+ *
+ * 落盘那一步（`NotePayload.normalized()` 里的截断）**必须**无条件裁剪：
+ * 它挡的是从备份导入的旧数据、以及程序自己的 bug，不能指望界面把关。
+ * 但界面必须让用户**先知道** —— 否则一个粘进去的长标题会在保存时被无声砍掉尾部，
+ * 而用户看到的是"保存成功"。一句话的提示，换掉的是
+ * "我明明写了那么多，怎么只剩下半截"。
+ *
+ * 判据用的是 `NotePayload.takeChars`，与真正落盘裁剪的是**同一个函数**。
+ * 自己写 `value.length > limit` 的话，两者会在"截断点正好落在一个 emoji 中间"
+ * 这一格上差一个 code unit，表现为"提示说没超限、保存时却少了一个字"。
+ *
+ * 不超限时返回 null，而不是一个渲染空内容的 lambda：后者会让
+ * `OutlinedTextField` 为一行空白留出高度。
+ */
+private fun overLimitHint(value: String, limit: Int, what: String): (@Composable () -> Unit)? =
+    if (NotePayload.takeChars(value, limit).length == value.length) {
+        null
+    } else {
+        {
+            Text(
+                text = "${what}已超过 $limit 字上限，保存时只保留前 $limit 字",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+
+/**
+ * 输入框下方的提示，最多并列两条：
+ * 先是「这一次为什么没加进去」（满额 / 重复），再是「字符数超了多少」。
+ *
+ * 两条互不替代 —— 满额时用户要腾个位置出来，超长时用户要删字，是两件事。
+ * 同时出现的情形很少（先攒满 32 个标签、再打一个超 32 字的），
+ * 但真出现时两句话都得在，否则用户会以为提示在说他刚做的那件事。
+ */
+private fun addHint(
+    notice: String?,
+    value: String,
+    limit: Int,
+    what: String,
+): (@Composable () -> Unit)? {
+    val over = overLimitHint(value, limit, what)
+    if (notice == null && over == null) return null
+    return {
+        Column {
+            if (notice != null) {
+                Text(
+                    text = notice,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (over != null) {
+                over()
+            }
+        }
+    }
+}
+
 @Composable
 private fun bodyFor(
     type: NoteType,
@@ -480,6 +559,7 @@ private fun bodyFor(
             label = { Text("正文") },
             minLines = 10,
             modifier = Modifier.fillMaxWidth(),
+            supportingText = overLimitHint(body, NotePayload.MAX_BODY_CHARS, "正文"),
         )
 
         NoteType.IMAGE, NoteType.VIDEO -> {
@@ -514,6 +594,7 @@ private fun bodyFor(
                 label = { Text("备注（可留空）") },
                 minLines = 4,
                 modifier = Modifier.fillMaxWidth(),
+                supportingText = overLimitHint(body, NotePayload.MAX_BODY_CHARS, "备注"),
             )
         }
 
@@ -750,7 +831,17 @@ private fun ChecklistEditor(
     onChange: (List<TodoItem>) -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
+    var notice by remember { mutableStateOf<String?>(null) }
     val done = todos.count { it.done }
+
+    // 回车键与"加号"这两个入口共用这一份。原先两处各抄了一遍同样三行 ——
+    // 于是"待办满 500 条时刚打的字被丢掉"这件事在同一个界面里存在两份。
+    val submit: () -> Unit = {
+        val r = todoAddResult(draft, todos.size)
+        r.value?.let { onChange(todos + TodoItem(it)) }
+        draft = r.draftAfter
+        notice = r.notice
+    }
 
     SectionHeader("待办（$done / ${todos.size}）")
 
@@ -761,27 +852,12 @@ private fun ChecklistEditor(
             label = { Text("新增一项") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    val text = draft.trim()
-                    if (text.isNotEmpty() && todos.size < NotePayload.MAX_TODOS) {
-                        onChange(todos + TodoItem(text))
-                    }
-                    draft = ""
-                },
-            ),
+            keyboardActions = KeyboardActions(onDone = { submit() }),
+            supportingText = addHint(notice, draft, NotePayload.MAX_TODO_CHARS, "待办"),
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
-        IconButton(
-            onClick = {
-                val text = draft.trim()
-                if (text.isNotEmpty() && todos.size < NotePayload.MAX_TODOS) {
-                    onChange(todos + TodoItem(text))
-                }
-                draft = ""
-            },
-        ) {
+        IconButton(onClick = submit) {
             Icon(Icons.Outlined.Add, contentDescription = "添加")
         }
     }
@@ -859,6 +935,7 @@ private fun CredentialEditor(
                     },
                     label = { Text("字段名") },
                     singleLine = true,
+                    supportingText = overLimitHint(field.label, NotePayload.MAX_FIELD_LABEL_CHARS, "字段名"),
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(8.dp))
@@ -898,6 +975,7 @@ private fun CredentialEditor(
                     },
                     autoCorrectEnabled = !field.sensitive,
                 ),
+                supportingText = overLimitHint(field.value, NotePayload.MAX_FIELD_VALUE_CHARS, "内容"),
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -946,6 +1024,7 @@ private fun TagEditor(
     onDraftChange: (String) -> Unit,
     onAdd: () -> Unit,
     onRemove: (String) -> Unit,
+    notice: String?,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -956,6 +1035,7 @@ private fun TagEditor(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { onAdd() }),
+                supportingText = addHint(notice, draft, NotePayload.MAX_TAG_CHARS, "标签"),
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))

@@ -14,6 +14,7 @@ import com.fpb.vault.crypto.KeySlot
 import com.fpb.vault.crypto.RecoveryCode
 import com.fpb.vault.crypto.UnlockOutcome
 import com.fpb.vault.crypto.VaultDek
+import com.fpb.vault.crypto.VaultDomain
 import com.fpb.vault.crypto.VaultKeyring
 import com.fpb.vault.data.BlobEmptyException
 import com.fpb.vault.data.BlobReader
@@ -22,6 +23,9 @@ import com.fpb.vault.model.NotePayload
 import com.fpb.vault.model.NoteType
 import com.fpb.vault.model.VaultNote
 import com.fpb.vault.model.VideoRef
+import com.fpb.vault.session.AuditKey
+import com.fpb.vault.session.LoginEvent
+import com.fpb.vault.session.LoginKind
 import com.fpb.vault.session.TagCount
 import com.fpb.vault.session.VaultSession
 import com.fpb.vault.vault.BackupInfo
@@ -56,6 +60,14 @@ sealed interface Route {
     /** 媒体库：聚合全部照片与视频的网格视图。诱饵库里不提供入口。 */
     data object Photos : Route
     data object Settings : Route
+
+    /**
+     * 登录记录。
+     *
+     * 走独立路由而不是设置页里的一个对话框：它是一张会长的列表（最多 200 条），
+     * 对话框里滚动列表既装不下也点不准。
+     */
+    data object LoginLog : Route
 }
 
 /**
@@ -183,6 +195,16 @@ class VaultAppState(private val context: Context) {
         private set
 
     /**
+     * 本次解锁发现的问题条目数（缺失 + 损坏）。0 = 库干净。
+     *
+     * 与 [loadWarning] 并存而不是从它反推：告警条是一句话，而设置页要的是
+     * 一个可以判零的数（"库状态：正常 / 有 N 条异常"）。从文案里抠数字出来
+     * 是把展示格式当数据用，改一次文案就会把那个判断一起改坏。
+     */
+    var loadProblemCount by mutableStateOf(0)
+        private set
+
+    /**
      * 「该导出备份了」的文案。null = 不需要提醒。
      *
      * 每次 [enterUnlocked] 用 [BackupReminder.eval] 重新判定，而不是常驻一个布尔值：
@@ -202,6 +224,35 @@ class VaultAppState(private val context: Context) {
      */
     val isDecoy: Boolean get() = session.isDecoy
 
+    // ==================== 登录记录 ====================
+
+    /**
+     * 登录记录，最新在前。
+     *
+     * 真库会话拿到的是**两本账合起来**的：真库自己那本 + 用审计钥匙读出来的
+     * 诱饵库那本（见 [VaultSession] 里 [AuditKey] 一段的说明）。
+     * 诱饵会话只有自己那本 —— 它读不到真库那本，连那一行叫什么名字都算不出来。
+     */
+    var loginEvents by mutableStateOf<List<LoginEvent>>(emptyList())
+        private set
+
+    /** 账本读不出来（**不是**"没有记录"）。界面必须把这两件事分开说。 */
+    var loginLogUnreadable by mutableStateOf(false)
+        private set
+
+    /** 已经到上限、更早的记录被挤掉了。界面据此说明"更早的看不到了"。 */
+    var loginLogTruncated by mutableStateOf(false)
+        private set
+
+    /**
+     * 真库侧是否已经建立了审计通道。
+     *
+     * 只有它为 true 时，"假密码的登录"才看得到。存量用户升上来时它是 false
+     * （这台设备从没建立过通道），需要在记录页里用假密码补一次绑定。
+     */
+    var decoyLogBound by mutableStateOf(false)
+        private set
+
     // ==================== 设置的镜像状态 ====================
     //
     // SharedPreferences 的写入**不会**触发 Compose 重组 —— 它只是个文件。
@@ -218,6 +269,17 @@ class VaultAppState(private val context: Context) {
 
     var biometricEnabled by mutableStateOf(settings.biometricEnabled)
         private set
+
+    /**
+     * 生物识别绑定被安全加固换代作废，需要用户重新启用一次。
+     *
+     * 界面必须拿它说一句话。**没有它就会变成一次静默失效**：用户的感受是
+     * "指纹解锁的按钮不见了"，而设置页上看不出任何异常 —— 设置自己变掉、
+     * 又查不出原因，比被要求重新点一次开关糟糕得多。
+     */
+    var biometricReenrollNeeded by mutableStateOf(settings.biometricReenrollNeeded)
+        private set
+
 
     var launcherAlias by mutableStateOf(settings.launcherAlias)
         private set
@@ -244,6 +306,8 @@ class VaultAppState(private val context: Context) {
         booted = true
         repairLauncherAlias()
         scope.launch {
+            retireLegacyBiometricBinding()
+
             val loaded = withContext(Dispatchers.IO) { runCatching { repository.keyring() } }
             val keyring = loaded.getOrNull()
             val failure = loaded.exceptionOrNull()
@@ -263,6 +327,35 @@ class VaultAppState(private val context: Context) {
                 keyring == null -> Phase.ONBOARDING
                 else -> Phase.LOCKED
             }
+        }
+    }
+
+    /**
+     * 作废上一代（v1）的硬件绑定，并在确实作废了东西时告诉用户重新启用一次。
+     *
+     * 为什么必须在**启动时**做，而不是等用户自己去看设置：做之前的盘面是
+     * "设置里显示已启用，解锁页却不给指纹按钮"（`hasEnrollment()` 那时已经是 false）。
+     * 那是一个自相矛盾的状态，而且用户完全无从理解它 —— 他只会觉得指纹功能坏了。
+     * 先把状态摆正、再给一句解释，才是"可接受的重新启用一次"。
+     *
+     * 判据交给 [BiometricGate.retireLegacyEnrollment]，这里不做任何猜测：
+     * 只有"Keystore 里真的躺着 v1 那个别名"时才动东西。已经用上 v2 的设备
+     * （包裹文件同名，只看文件会误伤）在这一步什么都不发生。
+     */
+    private suspend fun retireLegacyBiometricBinding() {
+        val retired = withContext(Dispatchers.IO) {
+            runCatching { biometric.retireLegacyEnrollment() }.getOrDefault(false)
+        }
+        if (!retired) return
+
+        val wasEnabled = settings.biometricEnabled
+        settings.biometricEnabled = false
+        biometricEnabled = false
+        // 只在"它本来是个能用的设置"时提示。本来就关着指纹的人不该收到这条通知 ——
+        // 对他来说没有发生任何变化，多一句话只会让人以为哪里出错了。
+        if (wasEnabled) {
+            settings.biometricReenrollNeeded = true
+            biometricReenrollNeeded = true
         }
     }
 
@@ -328,7 +421,10 @@ class VaultAppState(private val context: Context) {
         }
         return when (val outcome = keyring.unlock(password)) {
             is UnlockOutcome.Unlocked -> openSession(outcome)
-            UnlockOutcome.Rejected -> UnlockFeedback.Failure("密码不正确")
+            UnlockOutcome.Rejected -> {
+                noteFailedUnlock(password.isNotEmpty())
+                UnlockFeedback.Failure("密码不正确")
+            }
         }
     }
 
@@ -342,7 +438,12 @@ class VaultAppState(private val context: Context) {
                 return@withContext UnlockFeedback.Failure(e.message ?: "密钥文件损坏")
             }
             val dek = keyring.unlockWithRecoveryCode(input)
-                ?: return@withContext UnlockFeedback.Failure("恢复码不正确")
+            if (dek == null) {
+                // 抄错恢复码也算输错。不记的话，"有人拿着恢复码在试"这件事
+                // 会完全不留痕 —— 而恢复码是唯一能绕过主密码的东西。
+                noteFailedUnlock(input.isNotBlank())
+                return@withContext UnlockFeedback.Failure("恢复码不正确")
+            }
             openSession(UnlockOutcome.Unlocked(KeySlot.RECOVERY, dek))
         }
         busy = false
@@ -402,26 +503,178 @@ class VaultAppState(private val context: Context) {
         )
     }
 
+    /**
+     * 真正打开会话，并记一笔登录。
+     *
+     * 记录的类型**由槽推出**（[kindOf]），不由调用点传进来：同一个"输密码"入口
+     * 既可能开真库也可能开假库，在调用点硬写一个类型，会在假密码进来时
+     * 记成"用真密码打开保险库" —— 那是一条彻底错误的记录，而且看起来完全正常。
+     */
     private fun openSession(outcome: UnlockOutcome.Unlocked): UnlockFeedback = try {
         val report = session.unlock(outcome)
         applyLoadReport(report)
+        logSuccessfulUnlock(kindOf(outcome.slot))
         UnlockFeedback.Success
     } catch (t: Throwable) {
         UnlockFeedback.Failure(t.message ?: "保险库打不开")
     }
 
-    private fun applyLoadReport(report: VaultSession.LoadReport) {
-        loadWarning = when {
-            report.unreadableRows > 0 -> "有 ${report.unreadableRows} 条内容解密失败（存储可能已损坏）"
-            report.missingRows > 0 -> "有 ${report.missingRows} 条记录在数据库里找不到了"
-            else -> null
+    /**
+     * 槽 → 记录类型。
+     *
+     * 返回可空：将来若新增槽位而忘了在这里映射，结果是**宁可不记，也不记错**。
+     * 猜一个类型（比如默认成真密码）会凭空造出一条假记录，
+     * 而漏记一条至少不会骗人。
+     *
+     * 注意建库那一步不走 [openSession]（它直接开会话），因此新建的库
+     * 不会留下一条"刚建好就登录一次"的记录。
+     */
+    private fun kindOf(slot: KeySlot): LoginKind? = when (slot) {
+        KeySlot.PRIMARY -> LoginKind.REAL_PASSWORD
+        KeySlot.DECOY -> LoginKind.DECOY_PASSWORD
+        KeySlot.RECOVERY -> LoginKind.RECOVERY_CODE
+        KeySlot.BIOMETRIC -> LoginKind.BIOMETRIC
+    }
+
+    /**
+     * 这一次成功解锁：记一笔，并把"在此之前输错过几次"折成一条记录，然后把计数器清零。
+     *
+     * ## 三条记录合成一次写入
+     *
+     * 分两次写（先记失败、再记登录）的话，中间那次失败会留下一个坏状态：
+     * 失败计数已经清零、而记录没落地 —— 那批失败**凭空消失**。
+     * 见 [VaultSession.recordLogins]。
+     *
+     * ## 清零只发生在写入成功之后
+     *
+     * 写失败了就把计数留着，下一次解锁再记。宁可同一批失败被记两遍
+     * （用户看得见，也解释得通），也不能让它无声消失。
+     *
+     * ## 记账失败为什么不阻断解锁
+     *
+     * 记录不是用户的内容，为一条日志把用户挡在自己的库外面是本末倒置 ——
+     * 那正好帮了想进来的人。但也不能装作没发生：所以这里只把失败变成一句提示。
+     * 静默的后果是"记录里没有"被读成"没人进来过"，那正是这个功能最不该犯的错。
+     */
+    private fun logSuccessfulUnlock(logAs: LoginKind?) {
+        val now = System.currentTimeMillis()
+        if (logAs != null) {
+            val pending = settings.failedAttempts
+            val events = buildList {
+                if (pending > 0) {
+                    // 时刻取"最后一次输错"的时间，而不是现在 —— 否则一批凌晨的尝试
+                    // 会被画成"刚刚发生"，用户会以为此刻正有人在门口。
+                    add(
+                        LoginEvent(
+                            LoginKind.FAILED_ATTEMPTS,
+                            settings.lastFailedAt.takeIf { it > 0 } ?: now,
+                            pending,
+                        ),
+                    )
+                }
+                add(LoginEvent(logAs, now))
+            }
+            runCatching { session.recordLogins(events) }
+                .onSuccess { if (pending > 0) settings.clearFailedAttempts() }
+                .onFailure { setMessage("登录记录没能写入：${it.message ?: "未知原因"}") }
         }
+        refreshLoginLog()
+    }
+
+    /**
+     * 把账本读进界面状态。真库会话会把**诱饵库那本账也读出来**并进来 ——
+     * 这正是"有人用了假密码"能被真库发现的地方。
+     *
+     * 四种情况必须分开表达，它们看起来都像"空"但意思相反：
+     * 一本空账 = 确实还没人进来过；一本读不出来的账 = 有人动过手；
+     * "真库没有审计槽" = 这个功能还没建立（正常，补一次绑定就好）；
+     * "审计槽在但解不开" = 通道本身被人动过。
+     */
+    private fun refreshLoginLog() {
+        if (!session.isUnlocked) return
+        var merged = session.loginLog()
+        var unreadable = session.loginLogUnreadable()
+
+        // 诱饵会话自己没有登录记录页，但状态必须摆正：
+        // 否则锁上再用真密码进来时，界面会先显示上一个会话留下的列表。
+        if (session.isDecoy) {
+            loginEvents = merged.newestFirst()
+            loginLogTruncated = merged.isTruncated
+            loginLogUnreadable = unreadable
+            decoyLogBound = false
+            return
+        }
+
+        var bound = false
+        when (val slot = session.auditSlot()) {
+            // 没有槽 = 这台设备还没建立审计通道（存量用户升上来就是这个状态）。
+            // 这是**正常状态**：界面给一个"用假密码确认一次"的入口。
+            is VaultSession.AuditSlot.Absent -> Unit
+
+            // 槽在、但解不开。**绝不能当成"没有槽"**：那会把一次可能的篡改
+            // 显示成"这个功能还没开"，而这是这个页面最不该犯的错。
+            is VaultSession.AuditSlot.Damaged -> {
+                bound = true
+                unreadable = true
+            }
+
+            is VaultSession.AuditSlot.Present -> {
+                bound = true
+                try {
+                    when (val foreign = session.decoyLoginLog(slot.key)) {
+                        // null = 那一行在、但解不出来。同样不能当成"空的"：
+                        // 否则一段被破坏的记录会显示成"假密码从没被用过"。
+                        null -> unreadable = true
+                        else -> merged = merged.merged(foreign)
+                    }
+                } finally {
+                    slot.key.close()
+                }
+            }
+        }
+        loginEvents = merged.newestFirst()
+        loginLogTruncated = merged.isTruncated
+        loginLogUnreadable = unreadable
+        decoyLogBound = bound
+    }
+
+    /**
+     * 记一次解锁失败（密码或恢复码被拒）。
+     *
+     * 只累加一个明文计数，**不写账本**：此刻手上没有任何密钥，写不了密文
+     * （见 [SettingsStore.failedAttempts]）。真正的记录发生在下一次成功解锁时。
+     *
+     * 空输入不算：那是"什么都没输就按了解锁"，把它算成"输错一次"会让记录里
+     * 凭空多出一批根本没人尝试过的失败 —— 一条不值得信的记录比没有记录更糟。
+     *
+     * **生物识别的失败与取消不记**（见 [unlockWithBiometric] 的分支）：
+     * 那不是"输错密码"，把它算进来会让记录里多出用户自己按了取消的那些次，
+     * 次数一多，"有人在试你的密码"这句提示就彻底失去意义了。
+     */
+    private fun noteFailedUnlock(submitted: Boolean) {
+        if (!submitted) return
+        settings.noteFailedAttempt(System.currentTimeMillis())
+    }
+
+    /**
+     * 把解锁时那份加载报告摊成界面上要用的两个东西：一句告警、一个可以判零的数。
+     *
+     * [loadProblemCount] **必须在这里赋值** —— 它是设置页「库状态」那一行的唯一来源。
+     * 只声明不赋值的话属性恒为初始值 0，界面会一直说"正常"：
+     * 而"永远说正常"比"不显示这一行"更糟，它把一件用户能感知的异常
+     * （打不开的条目、找不到的记录）盖成了"没问题"。
+     *
+     * （文案本身由 [VaultSession.LoadReport.warning] 负责，见那里的说明。）
+     */
+    private fun applyLoadReport(report: VaultSession.LoadReport) {
+        loadProblemCount = report.problemCount
+        loadWarning = report.warning()
     }
 
     private fun enterUnlocked() {
         session.autoLockMillis = settings.autoLockMillis
         reload()
-        routes = listOf(Route.Home)
+        popToHome()
         query = ""
         tagFilter = null
         refreshBackupReminder()
@@ -473,7 +726,7 @@ class VaultAppState(private val context: Context) {
         bitmapCache.clear()
         notes = emptyList()
         tagCounts = emptyList()
-        routes = listOf(Route.Home)
+        popToHome()
         query = ""
         tagFilter = null
         phase = Phase.LOCKED
@@ -658,10 +911,6 @@ class VaultAppState(private val context: Context) {
             setMessage("图片保存失败：${error.message}")
             null
         }
-    }
-
-    suspend fun imageBytes(blobId: String): ByteArray? = withContext(Dispatchers.IO) {
-        runCatching { session.image(blobId) }.getOrNull()
     }
 
     /**
@@ -898,18 +1147,43 @@ class VaultAppState(private val context: Context) {
     suspend fun setDecoyPassword(decoy: CharArray?): String? {
         if (!session.isUnlocked) return "保险库已锁定"
         if (session.isDecoy) return "当前在诱饵库里，无法修改这项设置"
+        // 这里装的不是"失败"，而是"需要让用户知道的一句话"：关闭假密码时那本账
+        // 可能读不出来，那件事必须说出来 —— 但也不能因此把这次关闭拦下来。
+        var warning: String? = null
         val error = withContext(Dispatchers.Default) {
             runCatching {
                 val keyring = repository.keyring() ?: throw IllegalStateException("密钥文件不见了")
+
                 val updated = if (decoy == null) {
+                    // 关掉假密码：诱饵域那本账马上会连同诱饵 DEK 一起变得解不开，
+                    // 所以**先**把它并进真库 —— 它记的正是"有人用过假密码"，
+                    // 是这次改动里最该留下的东西。
+                    if (!mergeDecoyLogBeforeUnlink()) {
+                        warning = "假库那本登录记录读不出来（可能已损坏），没能并进真库"
+                    }
+                    session.unlinkAudit()
                     // 不删槽，换回一个解不开的占位包裹，保持密钥文件结构对称。
                     keyring.withoutDecoy()
                 } else {
                     // 诱饵库每次重设都要换一把全新的 DEK：沿用旧 DEK 的话，
                     // 上一个假密码保护过的那批内容会原样留在"新诱饵库"里。
-                    val decoyDek = VaultDek.random(com.fpb.vault.crypto.VaultDomain.DECOY)
+                    val decoyDek = VaultDek.random(VaultDomain.DECOY)
                     try {
-                        keyring.withDecoy(decoy, decoyDek)
+                        // 但**审计钥匙要沿用**：它跟密码无关，换掉它会让此前记下的
+                        // "有人用过假密码"再也读不出来。没有才新建一把。
+                        val slot = session.auditSlot()
+                        val auditKey = (slot as? VaultSession.AuditSlot.Present)?.key
+                            ?: AuditKey.random()
+                        try {
+                            // **先建审计通道，再落密钥文件。** 反过来的顺序若失败
+                            // （密钥已换、通道没建），结果是从此看不到假密码的登录，
+                            // 而用户察觉不到、也无从修。这个顺序的失败最多在真库
+                            // 留下一份指向旧诱饵库的槽，下一次重设就覆盖了。
+                            session.linkAudit(auditKey, decoyDek)
+                            keyring.withDecoy(decoy, decoyDek)
+                        } finally {
+                            auditKey.close()
+                        }
                     } finally {
                         decoyDek.close()
                     }
@@ -926,7 +1200,135 @@ class VaultAppState(private val context: Context) {
         if (error == null) {
             settings.secondarySlotConfigured = decoy != null
             secondarySlotConfigured = decoy != null
+            refreshLoginLog()
         }
+        return error ?: warning?.let {
+            if (decoy == null) "已关闭假密码。但$it" else "假密码已更新。但$it"
+        }
+    }
+
+    /**
+     * 把诱饵库那本登录账并进真库（在审计通道即将被拆掉之前）。
+     *
+     * ## 为什么只有"关假密码"需要它
+     *
+     * 诱饵那本账由审计钥匙保护，不随诱饵 DEK 更换而变化。所以**换成另一把假密码
+     * 时完全不用碰它** —— 早先"账本由诱饵 DEK 加密"的做法必须在这里抢先把账迁走，
+     * 而那种迁移一旦失败就是静默丢掉"有人用过假密码"。现在这条路径不存在了。
+     *
+     * @return true = 没有"读不出来的遗留账"（根本还没建立通道，也是 true）；
+     *         false = 槽在、但那本账解不出来，于是这次合并没能完成。
+     *
+     * 读不出来时**不阻断**调用方：用户关的是他自己的一个设置，为一条内部记录
+     * 把他卡住、而且他没有任何办法解决，比丢掉这条记录更糟。
+     * 但结果必须说出来（由调用方负责），否则"记录里没有"会被读成"没人用过假密码"。
+     */
+    private fun mergeDecoyLogBeforeUnlink(): Boolean {
+        val slot = session.auditSlot()
+        return when (slot) {
+            is VaultSession.AuditSlot.Absent -> true
+            is VaultSession.AuditSlot.Damaged -> false
+            is VaultSession.AuditSlot.Present -> try {
+                val foreign = session.decoyLoginLog(slot.key)
+                if (foreign == null) {
+                    false
+                } else {
+                    if (!foreign.isEmpty) {
+                        session.replaceLoginLog(session.loginLog().merged(foreign))
+                    }
+                    true
+                }
+            } finally {
+                slot.key.close()
+            }
+        }
+    }
+
+    /**
+     * 清空登录记录（**两本账都清**）。
+     *
+     * 只清真库那本的话，用户会看到"清空之后列表里还留着几条假密码登录" ——
+     * 那一刻他以为自己清空失败了，而其实只是另一半没被清。
+     *
+     * **诱饵会话一律拒绝**：这张页面在诱饵库里不显示（它会让那个库看起来
+     * "知道自己被监视"），但只靠界面不显示是不够的 —— 一旦哪天走错一步，
+     * 被胁迫者就能从假密码那边把真库的账清掉。
+     */
+    fun clearLoginLog() {
+        if (!session.isUnlocked) return
+        if (session.isDecoy) return
+        runCatching {
+            session.clearLoginLog()
+            val slot = session.auditSlot()
+            if (slot is VaultSession.AuditSlot.Present) {
+                try {
+                    session.clearDecoyLoginLog(slot.key)
+                } finally {
+                    slot.key.close()
+                }
+            }
+        }.onFailure { setMessage("清空登录记录失败：${it.message ?: "未知原因"}") }
+        refreshLoginLog()
+    }
+
+    /**
+     * 一次性绑定：把手上这把假密码交给真库一次，让"假密码的登录"从此能被看到。
+     *
+     * ## 为什么需要这个动作
+     *
+     * 审计通道只能在**同时拿到两把钥匙的那一刻**建立（真库 DEK 与诱饵 DEK 都要
+     * 在场，才能把同一把审计钥匙分别封进两个域）—— 那正是"设置假密码"的时候。
+     * 存量用户升上来时假密码早就设好了，App 手上从来没有过那把诱饵 DEK，
+     * 于是这一半记录看不见；要在记录页里输一次假密码补上。
+     *
+     * ## 为什么必须真的解开诱饵槽才算数
+     *
+     * 校验的不是"密码对不对"，而是"这把钥匙是不是诱饵库那把"。拿主密码来绑定，
+     * 写进诱饵域的就是真库钥匙，之后诱饵会话会拿它去算一个不存在的行 ——
+     * 界面上只会显示"假密码从没被用过"。**一个静默错误的安全结论。**
+     *
+     * @return 出错时返回一句给用户看的话；成功返回 null。
+     */
+    suspend fun bindDecoyLog(decoy: CharArray): String? {
+        if (!session.isUnlocked) return "保险库已锁定"
+        if (session.isDecoy) return "当前在诱饵库里，看不到这项"
+        val keyring = repository.keyring() ?: return "密钥文件不见了"
+
+        val error = withContext(Dispatchers.Default) {
+            runCatching {
+                when (val outcome = keyring.unlock(decoy)) {
+                    is UnlockOutcome.Unlocked -> {
+                        val dek = outcome.dek
+                        try {
+                            if (!outcome.isDecoy) throw IllegalArgumentException("这是主密码，不是假密码")
+                            // 已经有通道就沿用同一把审计钥匙（这里通常是"没有"）。
+                            val slot = session.auditSlot()
+                            val auditKey = (slot as? VaultSession.AuditSlot.Present)?.key
+                                ?: AuditKey.random()
+                            try {
+                                session.linkAudit(auditKey, dek)
+                            } finally {
+                                auditKey.close()
+                            }
+                        } finally {
+                            dek.close()
+                        }
+                    }
+                    // 解不开诱饵槽有两种可能：密码不对，或这台设备根本没开假密码
+                    // （槽里躺的是那个永远解不开的占位包裹）。两者对用户是同一件事：
+                    // "这个密码不是这台设备的假密码"。不区分，也不去读那个界面标志位 ——
+                    // 真正的判据永远是"这一槽能不能解开"，标志位只是个提示。
+                    UnlockOutcome.Rejected ->
+                        throw IllegalArgumentException("假密码不对。如果这台设备没有开假密码，就不用做这一步")
+                }
+            }.exceptionOrNull()?.let { e ->
+                when (e) {
+                    is IllegalArgumentException -> e.message ?: "假密码不正确"
+                    else -> "绑定失败：${e.message}"
+                }
+            }
+        }
+        if (error == null) refreshLoginLog()
         return error
     }
 
@@ -990,16 +1392,44 @@ class VaultAppState(private val context: Context) {
                 repository.replaceKeyring(updated)
                 settings.biometricEnabled = true
                 biometricEnabled = true
+                // 重新启用成功 = "需要你重新开一次"这件事已经了结，提示必须立刻撤掉。
+                // 撤晚了的后果是用户刚按提示做完，提示还挂在那里，看起来像没生效。
+                settings.biometricReenrollNeeded = false
+                biometricReenrollNeeded = false
                 setMessage("已启用生物识别解锁")
             },
             onFailure = { reason -> setMessage(reason) },
         )
     }
 
+    /**
+     * 关闭生物识别。
+     *
+     * 除了删硬件包裹（[BiometricGate.clear] 会连 Keystore 里的那把密钥一起销毁），
+     * 还要**把密钥文件里的 BIOMETRIC 槽一并去掉**。
+     *
+     * 只删文件不删槽，会留下一份永远解不开的密文：KEK 已随硬件密钥一起没了，
+     * 就算 `bio_wrap.bin` 从某处被恢复出来也没有第二把钥匙。它构不成漏洞，
+     * 但会让"这个库配过生物识别"在密钥文件里持续留痕 —— 而用户刚刚明确关掉了它。
+     * 另一头，`VaultKeyring.withoutSlot` 的注释一直写着"例如关闭生物识别"，
+     * 而在这次改动之前**没有任何生产代码调用它** —— 那句话描述的是一个不存在的调用方。
+     *
+     * 失败不阻断：改密钥文件是"顺手收拾干净"，而用户的意图是"关掉"。
+     * 两者冲突时以用户意图为准，写盘失败只会让那个死槽多留一轮。
+     */
     fun disableBiometric(reason: String? = null) {
         biometric.clear()
+        runCatching {
+            repository.keyring()
+                ?.takeIf { it.hasSlot(KeySlot.BIOMETRIC) }
+                ?.let { repository.replaceKeyring(it.withoutSlot(KeySlot.BIOMETRIC)) }
+        }
         settings.biometricEnabled = false
         biometricEnabled = false
+        // 用户自己关掉了，就不该再挂着"请重新启用一次"的提示：
+        // 那是**换代**造成的通知，而他刚刚明确表示不要这个功能。
+        settings.biometricReenrollNeeded = false
+        biometricReenrollNeeded = false
         reason?.let { setMessage(it) }
     }
 
@@ -1040,6 +1470,23 @@ class VaultAppState(private val context: Context) {
     }
 
     fun storageBytes(): Long = runCatching { session.storageBytes() }.getOrDefault(0L)
+
+    /**
+     * 占用空间**明细**。锁定时为 null —— 分类依赖内存索引里"哪些 blobId 被引用"，
+     * 而索引在锁定时是空的（见 [VaultSession.storageUsage]）。
+     *
+     * 每次调用都要扫一遍附件目录并为每个文件读一次块头，所以界面侧应当
+     * 只在进入设置页时算一次，而不是放在每次组合都会跑的位置。
+     */
+    fun storageUsage(): VaultSession.StorageUsage? =
+        runCatching { session.storageUsage() }.getOrNull()
+
+    /**
+     * 解密后图片的内存缓存占用。**这不是磁盘占用** ——
+     * 那个缓存从不落盘（原因见 [BitmapCache]），锁定即清空。
+     * 单独报出来是因为它会占着堆，而"应用占了多少内存"是用户会问的另一个问题。
+     */
+    fun bitmapCacheBytes(): Int = bitmapCache.sizeBytes()
 
     /** 切换桌面伪装图标。别名会同步应用到 PackageManager。 */
     fun applyLauncherAlias(alias: String) {
@@ -1094,6 +1541,7 @@ class VaultAppState(private val context: Context) {
         routes = listOf(Route.Home)
         bootError = null
         loadWarning = null
+        loadProblemCount = 0
         // 库已经不存在了，"该备份"的提醒必须跟着消失：否则重建库之后
         // 会看到一条指向空库的催促，而它引用的还是上一个库的导出时间。
         backupNotice = null
@@ -1107,6 +1555,7 @@ class VaultAppState(private val context: Context) {
         blockScreenshots = settings.blockScreenshots
         autoLockMillis = settings.autoLockMillis
         biometricEnabled = settings.biometricEnabled
+        biometricReenrollNeeded = settings.biometricReenrollNeeded
         secondarySlotConfigured = settings.secondarySlotConfigured
         themeMode = settings.themeMode
 
@@ -1217,6 +1666,13 @@ class VaultAppState(private val context: Context) {
         if (routes.size > 1) routes = routes.dropLast(1)
     }
 
+    /**
+     * 回到主页（把路由栈重置成只剩一条 Home）。
+     *
+     * 解锁、锁定、清库三条路都要做这件事，而且它们**必须做同一件事** ——
+     * 原先三处各写一遍 `routes = listOf(Route.Home)`，将来若有第四种入口，
+     * 很难保证不会有人写成 `routes.dropLast(...)` 之类的近似物。
+     */
     fun popToHome() {
         routes = listOf(Route.Home)
     }

@@ -155,8 +155,8 @@ data class NotePayload(
      * 而解密是**在解锁时一次性全量进行**的，届时会直接拖垮启动。
      */
     fun normalized(): NotePayload = copy(
-        title = title.trim().take(MAX_TITLE_CHARS),
-        body = body.take(MAX_BODY_CHARS),
+        title = takeChars(title.trim(), MAX_TITLE_CHARS),
+        body = takeChars(body, MAX_BODY_CHARS),
         // 顺序不能颠倒：必须先截断到最终落盘的样子，再判重。
         // 反过来写的话，两个仅在第 MAX_TAG_CHARS 个字符之后不同的标签会被判为"不同"
         // 而双双留下，截断之后却变得一模一样 —— 界面上于是出现两个完全相同的标签，
@@ -164,19 +164,19 @@ data class NotePayload(
         tags = tags
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-            .map { it.take(MAX_TAG_CHARS) }
+            .map { takeChars(it, MAX_TAG_CHARS) }
             .distinct()
             .take(MAX_TAGS),
         todos = todos
             .take(MAX_TODOS)
-            .map { it.copy(text = it.text.trim().take(MAX_TODO_CHARS)) }
+            .map { it.copy(text = takeChars(it.text.trim(), MAX_TODO_CHARS)) }
             .filter { it.text.isNotEmpty() },
         fields = fields
             .take(MAX_FIELDS)
             .map {
                 it.copy(
-                    label = it.label.trim().take(MAX_FIELD_LABEL_CHARS),
-                    value = it.value.take(MAX_FIELD_VALUE_CHARS),
+                    label = takeChars(it.label.trim(), MAX_FIELD_LABEL_CHARS),
+                    value = takeChars(it.value, MAX_FIELD_VALUE_CHARS),
                 )
             }
             .filter { it.label.isNotEmpty() },
@@ -214,8 +214,13 @@ data class NotePayload(
          *
          * 比 [MAX_IMAGES] 小得多，因为两边的代价不是一个量级：图片一条几百 KB 到几 MB，
          * 视频一条上限 2 GiB。真放开到 100 条，一条记录就能塞满 200 GiB ——
-         * 而"一条记录可能占多大"的上界，是别处（存储占用展示、孤儿清扫、
-         * 备份包的体量）都默认依赖的一个量。
+         * 而"一条记录可能占多大"的上界，是别处**默认依赖**的一个量：
+         * 备份恢复的总量预算就直接由它推出（见
+         * [com.fpb.vault.vault.BackupManager.MAX_TOTAL_BYTES]）。
+         *
+         * 所以改这个数会让那个预算跟着变 —— 这正是它必须被依赖、而不是"两处
+         * 各自写一个数字"的原因：各写一份时，改了这边忘那边，报出来的失败
+         * 会长得像"备份包损坏"，而真正的问题是恢复预算容不下应用自己允许存的量。
          */
         const val MAX_VIDEOS = 20
 
@@ -265,11 +270,30 @@ data class NotePayload(
             }
         }
 
+        /**
+         * 按长度截断，但**不切断一个字符**。
+         *
+         * `take(n)` 数的是 UTF-16 code unit，不是字符：一个 emoji 占两个 code unit，
+         * 截断点正好落在它中间时，留下的那个孤立高位代理会被 UTF-8 编码成 `?`
+         * —— 用户粘的那串 emoji 在落盘时静默少一个、变成一个问号；
+         * 而在摘要这种只显示不落盘的地方，它会显示成一个"�"方块。
+         * 两种后果都不报错，所以只能在截断这一步挡掉。
+         *
+         * 界面侧判断"会不会被截断"也要用这个函数，别自己写 `length > MAX`：
+         * 两个判据差一个 code unit 的话，会出现"提示说没超限、保存时却少了一个字"。
+         */
+        internal fun takeChars(value: String, limit: Int): String {
+            if (value.length <= limit) return value
+            val end = if (Character.isHighSurrogate(value[limit - 1])) limit - 1 else limit
+            return value.substring(0, end)
+        }
+
         /** 把多行文本压成一行，并截断到 [limit]。 */
         private fun flatten(source: String, limit: Int): String {
             val flat = source.replace(WHITESPACE, " ").trim()
             if (flat.isEmpty()) return ""
-            return if (flat.length <= limit) flat else flat.take(limit).trimEnd() + "…"
+            val clipped = takeChars(flat, limit)
+            return if (clipped.length == flat.length) clipped else clipped.trimEnd() + "…"
         }
 
         private val WHITESPACE = Regex("\\s+")

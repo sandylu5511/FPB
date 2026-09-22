@@ -132,7 +132,6 @@ class VaultSessionTest {
     fun `锁定时任何读取或写入都抛出异常而不是返回空数据`() {
         val f = Fixture()
         assertFalse(f.session.isUnlocked)
-        assertEquals(VaultSession.State.LOCKED, f.session.state)
 
         assertThrowsIllegalState("锁定时列出笔记应抛出") { f.session.notes() }
         assertThrowsIllegalState("锁定时搜索应抛出") { f.session.search("任意") }
@@ -404,6 +403,195 @@ class VaultSessionTest {
             // 越界是"读完了"（-1），不是"损坏"。
             assertEquals(-1, reader.readAt(reader.size, ByteArray(1), 0, 1))
         }
+    }
+
+    // ==================== 占用明细（设置页的"存储"那一栏） ====================
+
+    /**
+     * 明细的第一条不变量：**各项之和 == 总占用**。
+     *
+     * 没有这条，"明细"就只是一堆看着漂亮的数字：用户会去加，加起来对不上，
+     * 然后开始怀疑应用在偷偷占他的空间。而"总数比各项之和大一截"恰恰是最容易
+     * 出现的情况 —— 半截文件与没人引用的附件，都曾经不属于任何一项。
+     */
+    @Test
+    fun `占用明细的各项之和等于总占用`() {
+        val f = Fixture()
+        f.unlockReal()
+
+        val photo = f.session.putImage(bytesOf(1, size = 5000))
+        val video = f.session.putVideo(ByteArrayInputStream(videoBytes()))
+        f.session.create(
+            NotePayload(
+                type = NoteType.IMAGE,
+                title = "带照片和视频的一条",
+                images = listOf(ImageRef(photo, 100, 100)),
+                videos = listOf(VideoRef(video.blobId, 1920, 1080, 3_600L)),
+                createdAt = 0L,
+                updatedAt = 0L,
+            ),
+        )
+
+        val usage = f.session.storageUsage()!!
+        assertEquals(
+            "明细各项相加必须等于总占用 —— 对不上就说明有一类附件没被归到任何一项里",
+            f.session.storageBytes(),
+            usage.totalBytes,
+        )
+        assertEquals(1, usage.photoCount)
+        assertEquals(1, usage.videoCount)
+        assertEquals(0, usage.orphanCount)
+        assertEquals(0L, usage.tempBytes)
+    }
+
+    /**
+     * 没人引用的附件要单独归一类，**不能混进照片/视频的账里**。
+     *
+     * 混进去的后果不是"数字不准"，而是**清理功能看起来没用**：用户点"清理无用图片"，
+     * 数字本该跟着降下来；如果那些附件被算在"照片"里，清理前后照片那一项纹丝不动，
+     * 看起来就像清理失败了 —— 而它其实成功了。
+     */
+    @Test
+    fun `未被引用的附件单独归一类`() {
+        val f = Fixture()
+        f.unlockReal()
+
+        val live = f.session.putImage(bytesOf(1, size = 4000))
+        val orphan = f.session.putImage(bytesOf(2, size = 6000))
+        f.session.create(
+            NotePayload(
+                type = NoteType.IMAGE,
+                title = "只引用其中一张",
+                images = listOf(ImageRef(live, 10, 10)),
+                createdAt = 0L,
+                updatedAt = 0L,
+            ),
+        )
+
+        val usage = f.session.storageUsage()!!
+        assertEquals(1, usage.photoCount)
+        assertEquals(1, usage.orphanCount)
+        assertEquals("被引用那张占的字节", f.blobs.sizeOf(live), usage.photoBytes)
+        assertEquals(f.blobs.sizeOf(orphan), usage.orphanBytes)
+
+        // 清理之后那一类归零，而"照片"这一项一个字节都不能少。
+        assertEquals(1, f.session.purgeOrphanBlobs())
+        val after = f.session.storageUsage()!!
+        assertEquals(0, after.orphanCount)
+        assertEquals(0L, after.orphanBytes)
+        assertEquals(usage.photoBytes, after.photoBytes)
+    }
+
+    /**
+     * 附件文件不见时，"张数"必须跟着字节一起不算它，并**单独报出缺失**。
+     *
+     * 张数若取"记录里引用了几个"，这一行会显示"照片 5 张 · 3 MB" ——
+     * 用户看不出少了一张，也就不会想到那条记录里已经有一张永远打不开了。
+     * 张数与字节必须同源（都只在文件真的在磁盘上时才计数），缺失则另立一项，
+     * 这样用户至少有一条能追的线索。
+     */
+    @Test
+    fun `附件文件丢失时张数不算它并单独报出缺失`() {
+        val f = Fixture()
+        f.unlockReal()
+
+        val kept = f.session.putImage(bytesOf(1, size = 4000))
+        val lost = f.session.putImage(bytesOf(2, size = 6000))
+        f.session.create(
+            NotePayload(
+                type = NoteType.IMAGE,
+                title = "两张图",
+                images = listOf(ImageRef(kept, 10, 10), ImageRef(lost, 10, 10)),
+                createdAt = 0L,
+                updatedAt = 0L,
+            ),
+        )
+        // 模拟"文件在磁盘上不见了"：那条记录还引着它，但文件已经不在了。
+        assertTrue(f.blobs.delete(lost))
+
+        val usage = f.session.storageUsage()!!
+        assertEquals("磁盘上只剩一张", 1, usage.photoCount)
+        assertEquals("少掉的那张要单独报出来", 1, usage.missingPhotoCount)
+        assertEquals("字节只算真实存在的那张", f.blobs.sizeOf(kept), usage.photoBytes)
+        assertEquals(
+            "缺失说的是少了什么、不是占了什么，不能并进总占用",
+            f.session.storageBytes(),
+            usage.totalBytes,
+        )
+    }
+
+    /**
+     * 视频的**明文**大小必须能从落盘的头部读回来，而不是靠另存一个字段。
+     *
+     * 界面要告诉用户"这段视频多大"，而用户心里的数是**原始文件的字节数**；
+     * 磁盘上那个数比它多出固定开销。两个数都给出来，才不会出现
+     * "应用说我占了 2.1 GB、我明明只放了 2.1 GB"这种对不上的疑惑。
+     * 头部本来就记着明文长度（否则读不出块边界），所以这里不必新增落盘字段。
+     */
+    @Test
+    fun `视频的明文大小能从落盘头部读回来`() {
+        val f = Fixture()
+        f.unlockReal()
+        val plain = videoBytes()
+        val stored = f.session.putVideo(ByteArrayInputStream(plain))
+        f.session.create(videoNote(stored.blobId))
+
+        val usage = f.session.storageUsage()!!
+        assertEquals("明文大小取自分块头部", plain.size.toLong(), usage.videoPlainBytes)
+        assertEquals("密文占盘", f.blobs.sizeOf(stored.blobId), usage.videoBytes)
+        assertTrue("密文不可能小于明文", usage.videoBytes >= usage.videoPlainBytes)
+    }
+
+    /**
+     * 整块格式（图片）的明文大小靠"总长减固定开销"反推 —— 不必把内容解密出来。
+     *
+     * 设置页统计几百张图时，"读几个文件头"与"把每张图都解密一遍"是完全不同的代价，
+     * 而这里要的只是一个数字。
+     */
+    @Test
+    fun `图片的明文大小靠总长反推而不必解密`() {
+        val f = Fixture()
+        f.unlockReal()
+        val plain = bytesOf(3, size = 12_345)
+        val blobId = f.session.putImage(plain)
+        f.session.create(
+            NotePayload(
+                type = NoteType.IMAGE,
+                title = "一张",
+                images = listOf(ImageRef(blobId, 10, 10)),
+                createdAt = 0L,
+                updatedAt = 0L,
+            ),
+        )
+
+        assertEquals(plain.size.toLong(), f.session.storageUsage()!!.photoPlainBytes)
+    }
+
+    /**
+     * 锁定时返回 null，而**不是**一份"全部都是孤儿"的表。
+     *
+     * 分类靠的是内存索引里"哪些 blobId 被引用"，而索引在锁定时是空的 ——
+     * 那种回答不是"不精确"，是**反的**：它会把库里全部照片和视频都报成垃圾，
+     * 于是设置页会建议用户去清理他没删过的东西。
+     */
+    @Test
+    fun `锁定时占用明细返回空而不是把全部附件算成孤儿`() {
+        val f = Fixture()
+        f.unlockReal()
+        val photo = f.session.putImage(bytesOf(1, size = 3000))
+        f.session.create(
+            NotePayload(
+                type = NoteType.IMAGE,
+                title = "一张",
+                images = listOf(ImageRef(photo, 10, 10)),
+                createdAt = 0L,
+                updatedAt = 0L,
+            ),
+        )
+        assertNotNull("解锁态下应当能给出明细", f.session.storageUsage())
+
+        f.session.lock()
+        assertNull("锁定时无从判断谁被引用，不能拿空索引去猜", f.session.storageUsage())
     }
 
     @Test

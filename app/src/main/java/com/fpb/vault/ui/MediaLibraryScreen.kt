@@ -68,6 +68,7 @@ import com.fpb.vault.ui.components.MotionBadge
 import com.fpb.vault.ui.components.VideoBadge
 import com.fpb.vault.ui.components.VideoPlayGlyph
 import com.fpb.vault.vault.ImagePipeline
+import com.fpb.vault.vault.MediaImportRoute
 import com.fpb.vault.vault.MotionPhoto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -136,6 +137,10 @@ fun MediaLibraryScreen(state: VaultAppState) {
         scope.launch {
             val preparedImages = mutableListOf<ImagePipeline.Prepared>()
             val videoRefs = mutableListOf<VideoRef>()
+            // 这批视频的**明文**字节数。磁盘上存的是密文，而用户问的是
+            // "我放进来多大一段"，两个数只差固定开销，报明文才和他的认知对得上。
+            // 这也是 `VideoImport.Ready.plainBytes` 一直存在的理由（见 BlobSink 的注释）。
+            var videoPlainBytes = 0L
             // 图片超限的文案由 ImagePipeline 给出（上限值只应有唯一出处），
             // 这里只留最后一次的那句 —— 一批里超限的原因必然相同。
             var tooLargeMessage: String? = null
@@ -144,30 +149,40 @@ fun MediaLibraryScreen(state: VaultAppState) {
             val failures = mutableListOf<String>()
 
             uris.forEach { uri ->
-                when (classify(context, uri)) {
-                    NoteType.VIDEO -> {
-                        when (val outcome = state.importVideo { context.contentResolver.openInputStream(uri) }) {
-                            is VideoImport.Ready -> videoRefs += outcome.video
-                            is VideoImport.Rejected -> failures += outcome.message
+                val kind = classify(context, uri)
+                if (kind == NoteType.VIDEO) {
+                    when (val outcome = state.importVideo { context.contentResolver.openInputStream(uri) }) {
+                        is VideoImport.Ready -> {
+                            videoRefs += outcome.video
+                            videoPlainBytes += outcome.plainBytes
                         }
-                    }
 
-                    // 图片，以及"MIME 说不清"的那些（少数第三方提供方不给 type）。
-                    else -> {
-                        when (val outcome = withContext(Dispatchers.IO) { ImagePipeline.prepare(context, uri) }) {
-                            is ImagePipeline.Preparation.Ready -> preparedImages += outcome.prepared
-                            is ImagePipeline.Preparation.TooLarge -> tooLargeMessage = outcome.message
-                            // MIME 说不清时，图片这条路走不通就再按视频试一次 ——
-                            // 否则一个正常的视频会被报成"图片读不出来"，而用户拿它毫无办法。
-                            ImagePipeline.Preparation.Unreadable -> {
-                                val retry = state.importVideo {
-                                    context.contentResolver.openInputStream(uri)
-                                }
-                                when (retry) {
-                                    is VideoImport.Ready -> videoRefs += retry.video
-                                    is VideoImport.Rejected -> failures += retry.message
-                                }
+                        is VideoImport.Rejected -> failures += outcome.message
+                    }
+                    return@forEach
+                }
+
+                // 图片，以及"MIME 说不清"的那些（少数第三方提供方不给 type）。
+                // **先真的试一次图片**：下面那个判定全部基于这次尝试的结果
+                // （规则本身在 MediaImportRoute 里，可被单测逐条钉住）。
+                val image = withContext(Dispatchers.IO) { ImagePipeline.prepare(context, uri) }
+                when (val plan = MediaImportRoute.plan(kind, image)) {
+                    is MediaImportRoute.Plan.UseImage -> preparedImages += plan.prepared
+                    is MediaImportRoute.Plan.ImageTooLarge -> tooLargeMessage = plan.message
+
+                    // 图片这条路走不通就再按视频试一次 —— 否则一个正常的视频会被报成
+                    // "图片读不出来"，而用户拿它毫无办法。
+                    MediaImportRoute.Plan.TryVideo -> {
+                        val retry = state.importVideo {
+                            context.contentResolver.openInputStream(uri)
+                        }
+                        when (retry) {
+                            is VideoImport.Ready -> {
+                                videoRefs += retry.video
+                                videoPlainBytes += retry.plainBytes
                             }
+
+                            is VideoImport.Rejected -> failures += retry.message
                         }
                     }
                 }
@@ -215,6 +230,7 @@ fun MediaLibraryScreen(state: VaultAppState) {
                 importSummary(
                     images = writtenImages.size,
                     videos = videoRefs.size,
+                    videoPlainBytes = videoPlainBytes,
                     tooLarge = tooLargeMessage != null,
                     failures = failures,
                 ),
@@ -524,12 +540,19 @@ private fun classify(context: Context, uri: Uri): NoteType? =
 private fun importSummary(
     images: Int,
     videos: Int,
+    /** 这批视频的明文字节数。0 或没有视频时这一项只是一句"已保存 N 段视频"。 */
+    videoPlainBytes: Long,
     tooLarge: Boolean,
     failures: List<String>,
 ): String = buildString {
     val saved = buildList {
         if (images > 0) add("$images 张照片")
-        if (videos > 0) add("$videos 段视频")
+        // 视频带上体量：一段 2 GiB 的视频在"已保存 1 段视频"里完全看不出轻重，
+        // 而用户紧接着最可能问的就是"它多大、我的空间还够不够"。
+        if (videos > 0) {
+            val size = ImagePipeline.describeSize(videoPlainBytes)
+            add("$videos 段视频（$size）")
+        }
     }.joinToString("、")
     append(if (saved.isEmpty()) "没有导入任何内容" else "已保存 $saved")
     if (tooLarge) append("，有照片因超过体积上限被跳过")

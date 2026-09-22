@@ -158,11 +158,18 @@ object ImagePipeline {
         return result
     }
 
-    /** 仅供界面展示"占多大"。 */
+    /**
+     * 仅供界面展示"占多大"。
+     *
+     * 四档而不是三档：视频的单条上限是 2 GiB，只到 MB 的话它会显示成「2048.0 MB」——
+     * 用户得自己数位数才知道那是 2 GB。而设置页的占用明细、导入完成的提示、
+     * 导出成功的提示**都经过这里**，所以 GB 那一档不是锦上添花。
+     */
     fun describeSize(bytes: Long): String = when {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${(bytes / 1024.0).roundToInt()} KB"
-        else -> String.format("%.1f MB", bytes / 1024.0 / 1024.0)
+        bytes < 1024L * 1024 * 1024 -> String.format("%.1f MB", bytes / 1024.0 / 1024.0)
+        else -> String.format("%.1f GB", bytes / 1024.0 / 1024.0 / 1024.0)
     }
 
     /** 缩略图目标长边。列表卡片上显示约 72dp，取 3 倍密度足够。 */

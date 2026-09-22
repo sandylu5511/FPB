@@ -24,8 +24,13 @@ android {
         applicationId = "com.fpb.vault"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.0.9"
+        versionCode = 17
+        versionName = "1.1.6"
+
+        // 仪器测试的 runner。目前只有一组用例：验证硬件密钥的加固规格
+        // 是否真被平台接受（见 app/src/androidTest）。这类断言 JVM 单测做不了：
+        // android.jar 里的 android.* 方法全是会抛异常的 stub。
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -119,4 +124,9 @@ dependencies {
     // 加密内核是纯 JVM 逻辑（不碰 android.* API），因此可以在普通单元测试里直接跑生产代码。
     // 这也是选 BouncyCastle 纯 Java 实现而非 native 库的原因之一。
     testImplementation(libs.junit)
+
+    // 仪器测试。只用在"必须问真实平台"的地方 —— Keystore 的密钥规格、
+    // 生物识别的硬件能力探测都是这一类：它们的答案取决于设备，不取决于我们的代码。
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
