@@ -13,6 +13,9 @@ local.properties
 *.keystore
 !debug.keystore
 *.apk
+# APK 签名校验块（与 .apk 同属构建产物）。注意 `*.apk` 拦不住 `x.apk.idsig`
+# —— 后缀多了一截，匹配的是 `.idsig` 不是 `.apk`。
+*.idsig
 
 # Kotlin 构建产物（2.x 起独立于 .gradle/，不排会被 git add -A 带进去）
 .kotlin/
