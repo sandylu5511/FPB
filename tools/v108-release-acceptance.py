@@ -99,7 +99,7 @@ def screen_frame():
 
 
 def window_secure():
-    """当前应用窗口有没有带 FLAG_SECURE。读不到返回 None。
+    """**应用自己的活动窗口**有没有带 FLAG_SECURE。读不到返回 None。
 
     **两种打印格式都要认**：
 
@@ -110,18 +110,50 @@ def window_secure():
 
     本轮第一次跑只认了十六进制，解析器悄悄返回 None，于是三条判据全变红 ——
     而功能完全是对的（像素证据：全黑 vs 99.52% 亮像素）。**解析不到不等于没生效。**
+
+    ## 不能"扣最靠前那个同包名窗口"（2026-09-18 抓到了现场）
+
+    冷启动的一瞬间，同一个包里会**同时**有两个窗口，而启动图那个排在前：
+
+        Window #8 Window{4797ae9 u0 Splash Screen com.fpb.vault}:              ← fl 里没有 SECURE
+        Window #9 Window{1fa1e7a u0 com.fpb.vault/com.fpb.vault.MainActivity}: ← fl 里有 SECURE
+
+    于是「release 包开箱即禁止截屏」这条判据**假红**：验收报"这版包没开防截屏"，
+    而同一时刻的截图是全黑的 —— 防截屏正生效。它会把人引去查一个并不存在的安全回退。
+    （2026-09-17 出过同样的现象，但当时没留现场、事后复现不出来；
+    这次留了 `window-dump-1.txt`，两个窗口一目了然。）
+
+    所以按**窗口名**挑：优先 `<包名>/<Activity>` 这种（真正的活动窗口），
+    **跳过名字里带 `Splash` 的启动图窗口**。若台面上只有启动图窗口，
+    返回 `None` → "还没到能判的时候"，交给调用方重试 ——
+    **不是 `False`（那会说成"真没开"）**。挑不到任何活动窗口才退回第一个候选。
     """
     out = sh("shell", "dumpsys", "window", "windows")
     lines = out.splitlines()
-    for i, line in enumerate(lines):
-        if "Window{" in line and PKG in line:
-            for j in range(i, min(i + 30, len(lines))):
-                if not re.match(r"\s*fl=", lines[j]):
-                    continue
-                m = re.match(r"\s*fl=#([0-9a-fA-F]+)", lines[j])
-                if m:
-                    return bool(int(m.group(1), 16) & FLAG_SECURE)
-                return "SECURE" in lines[j].split("=", 1)[1].split()
+    hits = [i for i, line in enumerate(lines) if "Window{" in line and PKG in line]
+    if not hits:
+        return None
+    # `<包名>/` 只出现在"活动窗口"的窗口名里（`com.fpb.vault/com.fpb.vault.MainActivity`）。
+    # 启动图窗口叫 `Splash Screen com.fpb.vault`，匹配不上。
+    live = [i for i in hits if f"{PKG}/" in lines[i]]
+    if not live:
+        return None
+    return _secure_flag_at(lines, live[0])
+
+
+def _secure_flag_at(lines, i):
+    """第 i 行那个窗口的 `fl=` 里有没有 SECURE。读不到返回 None。
+
+    只在这里解析一次 —— 多一个解析副本就多一个"只认十六进制"的坑
+    （见 [window_secure] 的 KDoc）。
+    """
+    for j in range(i, min(i + 30, len(lines))):
+        if not re.match(r"\s*fl=", lines[j]):
+            continue
+        m = re.match(r"\s*fl=#([0-9a-fA-F]+)", lines[j])
+        if m:
+            return bool(int(m.group(1), 16) & FLAG_SECURE)
+        return "SECURE" in lines[j].split("=", 1)[1].split()
     return None
 
 

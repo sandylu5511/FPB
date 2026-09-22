@@ -27,7 +27,7 @@
 
 `tools/_mkvideos.py` 合成两段**纯红底**影片：
 
-  · `landscape.mp4` 320×180 60 秒（16:9）—— 验常规路径（长度是被第 5 段逼出来的，见下）
+  · `landscape.mp4` 320×180 120 秒（16:9）—— 验常规路径（长度被走查节奏逼过两次，见下）
   · `portrait.mp4`  480×854  8 秒（9:16）—— 验"竖屏不被摆成横的"
 
 红底是为了复用 v1.0.9 那一轮已经跑通的 `band_of()`：靠"这一行有多少比例是红的"
@@ -63,9 +63,10 @@
 之后「点坐标 → 用截图判断停了没有」，`screencap` 只要 0.3~0.9 秒，
 整个动作落在控制条亮着的窗口里。
 
-横屏素材从 30 秒加到 60 秒，也是被这一段逼的：打开 → 连拍取"在播" →
-暂停 → 读数 → 拖到 30% → 恢复播放 → **切后台再回来**（这一段必须在"仍在播"
-的状态下做）→ 再连拍，全程四十多秒。片子短了就会撞上"刚好播完"，
+横屏素材加长过两次，都是被这一段逼的（30 → 60 → 120 秒，第二次的经过见
+`tools/_mkvideos.py` 的说明）：打开 → 连拍取"在播" → 暂停 → 读数 → 拖到 30% →
+恢复播放 → **切后台再回来**（这一段必须在"仍在播"的状态下做）→ 再连拍。
+release 包上这一路要 80 秒上下，片子短了就会撞上"刚好播完"，
 而"播完"会让按钮状态那一组断言**变成自己满足自己**。
 
 ## 进度条的落点不能用"节点宽度 × 比例"算（这一轮踩出来的）
@@ -132,8 +133,8 @@ VIEW_W, VIEW_H = 1080, 2400
 # 两段素材的"预期"。band 高度 = 1080 宽铺进去之后应得的高度。
 CLIPS = {
     "landscape.mp4": {
-        "duration_ms": 60_000,
-        "label": "1:00",
+        "duration_ms": 120_000,
+        "label": "2:00",
         "src": (320, 180),
         "band_h": VIEW_W * 180 / 320,      # 607.5
         "tag": "横屏 16:9",
@@ -162,6 +163,21 @@ GESTURE_Y, GESTURE_X0, GESTURE_X1 = 2350, 350, 730
 BURST_PLAY = 8      # 打开后连拍张数：够覆盖"在播"这个结论
 BURST_PAUSE = 4     # 暂停后连拍张数：只需证明"不再变"
 
+# 控制条在**播放中**只亮这么久（app 侧 `CONTROLS_TIMEOUT_MS`，见 ImageViewerScreen）。
+# 抄过来不是为了让两处数字长得一样，是为了让 [TAP_GAP_S] 的**依据**留在代码里：
+# 连点两下的间隔必须远小于它，否则第二下落在已经收起的控制条上 ——
+# 那一下只会把控制条再 toggle 一次，"点了几次都没反应"就是这么来的。
+CONTROLS_LIFE_S = 3.5
+TAP_GAP_S = 0.45    # 连点两下的间隔：够控制条滑出来，又远小于 3.5 秒
+MAX_PAUSE_ROUNDS = 3   # 连点两下算一轮；三轮还停不下就当失败，别无限重试
+# 「暂停前画面确实在动」这一读数的重试次数。
+# 画面读数会陈旧（`screencap` 返回一两秒前的帧），而陈旧只持续一两秒 ——
+# 重试一次基本就能拿到活读数。见 [tap_pause] 里那段说明。
+BEFORE_TRIES = 3
+# 「应用自己报的播放位置」两次读数之间隔多久。
+# 显示精度是 1 秒，播放中隔 2 秒必然跨过至少一个整秒 —— 拿它当"播放器还在走"的证据。
+CLOCK_SETTLE_S = 2.0
+
 # 分块格式的头部形状，与 app 侧 ChunkedBlobFormat 对齐。这里**独立实现一遍**，
 # 不 import 被测代码 —— 用被测代码去验被测代码的产物，等于没验。
 CHUNK_MAGIC = b"FPBCHK\x01\x00"
@@ -174,6 +190,10 @@ CHUNK_SIZE = 1 << 20
 PLAINTEXT_MARKERS = (b"ftyp", b"moov", b"mdat", b"avc1")
 
 FAILURES = []
+# 「不适用」的判据（这一轮的包/环境不具备验证条件）。**不计入 FAILURES** ——
+# 把它算成红会让"验不了"看起来像"验不过"；而算成绿就等于撒谎。
+# 见 [skip] 的说明：恒绿比恒红危险。
+SKIPPED = []
 
 
 # ==================== 基础设施 ====================
@@ -237,6 +257,25 @@ def check(label, ok, detail=""):
 def note(label, detail):
     """只记录、不判定。对照轮的观测用这个，避免"对照组没重现"把整轮判红。"""
     print(f"    [记录] {label}：{detail}")
+
+
+def skip(label, why):
+    """判不了的一条：明确记成「不适用」，既不占 PASS 也不占 FAIL。
+
+    ## 为什么需要第三种状态
+
+    2026-09-17 在 release 包上跑这一轮时踩出来的：三条靠 `run-as` 读沙箱的判据
+    全部报红（`run-as` 只对 debuggable 的包开放），而同一段里
+    "删除后密文消失"那条**恒绿** —— 它的断言是 `len(files) == 0`，
+    而读不到沙箱时 `files` 恒为空，于是 0 == 0 无条件成立。
+
+    恒绿比恒红危险得多：恒红至少会有人去看，恒绿会让人以为"这件事验过了"。
+    可验不了和验过了是两件事，所以这里给它们第三种状态。
+    凡是"这一轮的包/环境不具备验证条件"的判据，都走这里，
+    **并在文案里说清去哪一轮找它的证据。**
+    """
+    SKIPPED.append(label)
+    print(f"    [不适用] {label}：{why}")
 
 
 def rnodes(retries=8):
@@ -305,6 +344,61 @@ def installed_version():
     return f"{m.group(1) if m else '?'} (code {n.group(1) if n else '?'})"
 
 
+# ==================== 装包/卸包：每一步都验结果 ====================
+#
+# 2026-09-17 第四次假红之后补的。这台机器上 adb server 会自己掉，掉线期间
+# 命令带着 `error: device offline` **正常返回**（不抛异常、退出码也不一定非零）。
+# 于是"调了卸载、不看结果、接着装"这条路会以一句
+# `INSTALL_FAILED_VERSION_DOWNGRADE` / `signatures do not match` 冒出来 ——
+# 症状指向"版本号/签名配错了"，而真因是设备掉线。
+#
+# 判据一律是**复核包的存亡**，不是那句话：这台设备实测过
+# `DELETE_FAILED_INTERNAL_ERROR` 会误报（包其实已经删掉了）。
+
+def wait_device(timeout=60):
+    end = time.time() + timeout
+    while time.time() < end:
+        blob = sh("get-state")
+        if "device" in blob and "offline" not in blob:
+            return True
+        subprocess.run([ADB, "start-server"], capture_output=True, timeout=120)
+        time.sleep(2)
+    return False
+
+
+def pkg_installed():
+    """设备离线时返回 True（保守：当作还装着，让调用方重试）。"""
+    if not wait_device(timeout=30):
+        return True
+    return PKG in sh("shell", "pm", "list", "packages")
+
+
+def uninstall_pkg():
+    for attempt in range(1, 4):
+        wait_device()
+        out = sh("uninstall", PKG).strip()
+        if not pkg_installed():
+            if "Success" not in out:
+                W.log(f"    卸载第 {attempt} 次返回 {out[:80]}，但复核后包确实已消失"
+                      f"（这台设备会误报 DELETE_FAILED_INTERNAL_ERROR）")
+            return True
+        W.log(f"    卸载第 {attempt} 次返回 {out[:80]}，包仍在，重试")
+        time.sleep(2)
+    return False
+
+
+def install_apk(path):
+    """装，并**确认装上了**。返回 adb 的输出供调用方记录。"""
+    wait_device()
+    out = sh("install", "-r", "-g", path)
+    if "Success" in out and pkg_installed():
+        return out
+    raise AssertionError(
+        f"安装 {path} 未确认成功。adb 说：{out.strip()[:300]}；"
+        f"复核 pm list 时{'在' if pkg_installed() else '不在'}"
+    )
+
+
 # ==================== 像素度量（numpy） ====================
 
 def grab(name):
@@ -343,19 +437,69 @@ def burst(prefix, count, out_dir=None):
     return rows
 
 
-# 「在播」与「停住」的门槛，单位 px/s。探针影片里白块的横移真值约 16.7 px/s，
-# 两个门槛各取真值的一半与五分之一，中间留出很宽的判定带。
-MOVING_SPEED = 8.0
-STILL_SPEED = 3.0
+# ==================== 「在播」/「停住」的门槛 ====================
+#
+# 判据是**速度与真值的比**，不是写死的 px/s。
+#
+# 白块在影片里从最左匀速走到最右，走完正好一个 (条带宽 − 块宽)，
+# 所以它在屏幕上的速度真值就是
+#
+#     真值 = (条带宽 − 块宽) / 片长
+#
+# 两个宽度都从连拍帧上量（`band_of` / `block_x` 用的是同一个屏幕坐标系，
+# 屏幕缩放自动消掉），片长取 [CLIPS] 里那份夹具事实。
+# `motion_stats` 返回 `ratio = 速度 / 真值`，下面两个门槛判的就是它。
+#
+# ## 为什么不再写死（2026-09-17 的第五次假红）
+#
+# 这里原来是 `MOVING_SPEED = 8.0` / `STILL_SPEED = 3.0` 两个常数，
+# 照当时注释里那句"真值约 16.7 px/s"各取一半与五分之一标的。
+# 而 `_mkvideos.py` 的白块位移是**按整片长度归一化**的
+# （`bx = int(span * (i / max(1, total - 1)))`）—— 那一轮为了让控制条那 3.5 秒的
+# 窗口够用，把横屏素材从 60 秒加长到 120 秒（见 `_mkvideos.py` 顶部的说明），
+# **片长翻倍，像素速度就减半**：真值 16.7 → 8.3，正好落到写死的门槛上。
+#
+# 实测那一轮读到 8.3 / 8.0 / 11.0 / 7.8 px/s —— 一半的读数被判成"没在动"，
+# "点暂停之前确实处于播放态"这条**前提**于是变成 False，
+# 后面一串依赖它的判据（控制条读数、进度条拖动、切后台再回来）跟着全红。
+# 八个 FAIL 里没有一个能归到应用头上，全是量具拿旧标定去量新素材。
+# 门槛改由素材自己给，以后再改片长、改分辨率都不会再失配。
+#
+# 取值：在播取真值的一半、停住取真值的五分之一，两侧都留出三倍以上余量
+# （实测在播读数落在真值的 0.94~1.05，停住读数就是 0.00）。
+MOVING_RATIO = 0.5
+STILL_RATIO = 0.2
+
+# 运动读数只在大图页那段横屏影片上取：竖屏那条只抓单帧验比例，不看运动。
+# 速度真值要片长，这里把它固定成一处，别让它在各个调用点上漂。
+MOTION_CLIP = "landscape.mp4"
+
+# 切后台再回来时，画面位置允许比切走前**回退**多少秒。
+#
+# 时间上只应该往前走（切出去那几秒不算播放），所以正常值是"回来 ≥ 切走前"。
+# 留 3 秒是给两个方向都留的余量：① 切走前那一帧的采样本身就晚了不到一秒；
+# ② 重建 + prepare + seek 落地需要时间，最早那几帧可能还没跳到目标位置。
+#
+# 而"从头重播"这条缺陷的偏移量是**几十秒**（切走前在第 36 秒，回来在第 0 秒），
+# 离 3 秒的门槛差着一个数量级 —— 不会有灰色地带。
+# 详见 B 轮 5.6 段。
+POSITION_KEEP_TOL = 3.0
 
 
 def centroids(rows):
-    """从连拍结果里取出「白块横向质心」序列 → [(文件名, cx)]。
+    """取出「白块横向质心」序列，外加**量到的几何** → `{"points", "band_w", "block_w"}`。
 
     连拍帧里量不到影片画面的那些直接跳过（可能是黑屏过渡帧或系统弹窗），
-    所以返回的条数**可能少于**连拍张数 —— 判据里要按实际条数说话。
+    所以 `points` 的条数**可能少于**连拍张数 —— 判据里要按实际条数说话。
+
+    [band_w] / [block_w] 取**第一个量到白块的帧**上的读数，供 [motion_stats]
+    推"速度真值"用。两者在整段里都是常数：块宽来自夹具里的
+    `bw = max(16, width // 13)`，条带宽就是影片在屏幕上的显示宽度。
+    量不到就是 `None` —— 此时真值推不出来，判据会**响亮地失败**，
+    而不是拿一个假的阈值凑一个通过。
     """
     xs = []
+    band_w = block_w = None
     for p, a in rows:
         if a is None:
             continue
@@ -365,11 +509,15 @@ def centroids(rows):
         blk = block_x(a, b)
         if blk:
             xs.append((os.path.basename(p), round(blk["cx"], 1)))
-    return xs
+            if band_w is None:
+                band_w, block_w = b["w"], blk["w"]
+    return {"points": xs, "band_w": band_w, "block_w": block_w}
 
 
-def motion_stats(xs, out_dir=None):
-    """从质心序列算出位移与**速度**；不足两帧、或时间戳不可用返回 None。
+def motion_stats(m, out_dir=None, clip=MOTION_CLIP):
+    """从质心与几何算出位移、**速度**、**速度真值**，以及两者的比 [ratio]。
+
+    不足两帧、或时间戳不可用返回 None。
 
     ## 为什么判据是速度，不是固定像素数
 
@@ -378,38 +526,138 @@ def motion_stats(xs, out_dir=None):
     按固定像素阈值判，前者会被误判成"没动"：B 轮就出过这条假 FAIL，
     返回后重播那组刚好 20.0px，恰好卡在 `> 20` 的门槛上。
 
-    而速度与模拟器快慢无关：探针影片里白块的横移速度是
-    (画面宽 - 块宽) / 时长 ≈ 16.7 px/s，两条门檻取它的一半与五分之一。
+    ## 为什么判据是**比值**，不是写死的速度
+
+    白块从最左走到最右，走完正好一个 (条带宽 − 块宽) —— 所以速度真值是
+    `(band_w - block_w) / 片长`，这是它的**定义式**，不是拟合。
+    连拍帧上量到的宽度与质心在同一个屏幕坐标系里，屏幕缩放自动消掉。
+
+    原先门槛写死成 px/s，靠"素材是 60 秒"这个隐含前提活着；
+    片长一变，真值跟着变，门槛就成了刻舟求剑（见 [MOVING_RATIO] 上面那段）。
+    改成比值之后，换素材、换分辨率、换片长都不必再动门槛。
     """
-    if len(xs) < 2:
+    if len(m["points"]) < 2:
         return None
     base = out_dir or OUT
     try:
-        t0 = os.path.getmtime(os.path.join(base, xs[0][0]))
-        t1 = os.path.getmtime(os.path.join(base, xs[-1][0]))
+        t0 = os.path.getmtime(os.path.join(base, m["points"][0][0]))
+        t1 = os.path.getmtime(os.path.join(base, m["points"][-1][0]))
     except OSError:
         return None
     dt = t1 - t0
     if dt <= 0:
         return None
+
+    xs = m["points"]
     span = max(x[1] for x in xs) - min(x[1] for x in xs)
-    return {"n": len(xs), "span": span, "dt": dt, "speed": span / dt}
+    speed = span / dt
+
+    duration_s = CLIPS[clip]["duration_ms"] / 1000.0
+    band_w, block_w = m["band_w"], m["block_w"]
+    truth = ratio = None
+    if band_w and block_w and band_w > block_w:
+        truth = (band_w - block_w) / duration_s
+        if truth > 0:
+            ratio = speed / truth
+
+    return {"n": len(xs), "span": span, "dt": dt, "speed": speed,
+            "truth": truth, "ratio": ratio, "band_w": band_w,
+            "block_w": block_w, "duration_s": duration_s}
 
 
 def motion_text(st):
     if st is None:
         return "量不到足够的两帧（或截图时间戳不可用）"
+    if st["ratio"] is None:
+        return (f"{st['n']} 个读数，位移 {st['span']:.1f}px / {st['dt']:.2f}s "
+                f"→ {st['speed']:.1f} px/s，但**真值推不出来**"
+                f"（条带宽 {st['band_w']} / 块宽 {st['block_w']} 没量到）"
+                f" —— 没法判断，按失败处理")
     return (f"{st['n']} 个读数，位移 {st['span']:.1f}px / {st['dt']:.2f}s "
-            f"→ {st['speed']:.1f} px/s（在播门槛 {MOVING_SPEED:.0f}、"
-            f"停住门槛 {STILL_SPEED:.0f}）")
+            f"→ {st['speed']:.1f} px/s = 真值的 {st['ratio']:.2f} 倍"
+            f"（真值 {st['truth']:.1f} = ({st['band_w']}−{st['block_w']})px"
+            f" / {st['duration_s']:.0f}s；门槛 在播 ≥{MOVING_RATIO:.2f}、"
+            f"停住 ≤{STILL_RATIO:.2f}）")
 
 
 def moving(st):
-    return st is not None and st["speed"] >= MOVING_SPEED
+    """此刻在播？—— 速度达到真值的一半。
+
+    实测在播读数落在真值的 0.94~1.05，取 0.5 是给采样抖动留的余量。
+    `ratio` 为 None（真值量不到）**一律判否**：宁可响亮地失败，
+    也不拿一个没有依据的门槛凑通过。
+    """
+    return st is not None and st["ratio"] is not None and st["ratio"] >= MOVING_RATIO
 
 
 def still(st):
-    return st is not None and st["speed"] <= STILL_SPEED
+    """此刻停住了？—— 速度低到真值的五分之一以下。
+
+    暂停时白块逐帧位置完全相同，速度就是 0.00，离门槛很远。
+    门槛取 0.2 而不是更松，是因为两侧后果不对称：
+    "把在播读成停住"会**伪造通过**（危险），"把停住读成在播"只会多点一次
+    （见 `tap_pause` 的三次重试），最后仍以返回 False 响亮收场。
+    """
+    return st is not None and st["ratio"] is not None and st["ratio"] <= STILL_RATIO
+
+
+def implied_secs(cx, band_w, block_w, clip=MOTION_CLIP):
+    """白块质心 → 这段影片**播到第几秒**。量不出来返回 None。
+
+    进度 = (质心 − 块宽/2) / (条带宽 − 块宽)；秒数 = 进度 × 片长。
+
+    两个宽度取自**同一帧上的测量**（同一屏幕坐标系），所以设备分辨率、系统缩放
+    都被约掉，不用重标；片长取自 [CLIPS] 的夹具事实，不写死秒数。
+
+    ## 为什么不能只靠界面上的 `m:ss`
+
+    控制条那个读数**是应用自己的说法**。2026-09-17 那次冻结的现场就是：
+    界面说 `0:52` + 暂停图标（应用认为在播），而画面里白块一直贴在 0 秒的位置。
+    两个读数打架时，**画面才是事实** —— 用户看的也是画面。
+    """
+    if band_w is None or block_w is None or band_w <= block_w:
+        return None
+    prog = (cx - block_w / 2.0) / float(band_w - block_w)
+    if prog <= 0:
+        return 0.0
+    if prog >= 1:
+        return CLIPS[clip]["duration_ms"] / 1000.0
+    return prog * (CLIPS[clip]["duration_ms"] / 1000.0)
+
+
+def position_keep_verdict(before_secs, after_secs, tol=POSITION_KEEP_TOL):
+    """B 轮 5.6 段那条判据的判定逻辑 → `(状态, 说明)`，状态 ∈ {"pass","fail","skip"}。
+
+    抽成一个函数而不是写在 B 轮里，是为了**能被自测**：`tools/motion/
+    selftest_position_keep.py` 会拿**已经发生过的失败现场**（`dist/evidence/
+    v110-release/` 那批连拍）喂进来，确认它真的判红。判定逻辑只有这一份 ——
+    自测和走查跑的是同一段代码，不会各写一套然后各自漂走。
+
+    ## 为什么"切走前不足 10 秒"要判 skip 而不是 pass
+
+    切走前本来就在第 2 秒，那么"回来也在第 2 秒"既可能是**保住了**、
+    也可能是**复位了** —— 两种解释都成立，这时候判 pass 就是假通过。
+    第一版复现探针正是栽在这儿：它每轮都重新打开影片，位置天然接近 0，
+    于是跑出"3/3 全绿"，却什么都没证明。宁可记成「判不了」。
+
+    ## 为什么用 after 的**最大值**
+
+    重建 + prepare + seek 落地要时间，连拍最早那几帧可能还停在 seek 之前的画面上
+    —— 那个不算"位置丢了"，是多等一帧的事。反过来，"从头重播"时**每一帧**都贴在
+    0 秒附近，最大值也救不了它（偏移量是几十秒，离 3 秒的容差差一个数量级）。
+    """
+    if before_secs is None:
+        return "skip", "切走前那一帧量不出白块位置（没有对照值）"
+    if before_secs < 10.0:
+        return "skip", (f"切走前只量到第 {before_secs:.1f} 秒（<10 秒）——"
+                        f"「复位到 0」和「本来就接近 0」分辨不开")
+    if not after_secs:
+        return "fail", f"切走前在第 {before_secs:.1f} 秒，但回来后一帧都没量到白块位置"
+    low, high = min(after_secs), max(after_secs)
+    ok = high >= before_secs - tol
+    return ("pass" if ok else "fail"), (
+        f"切走前 画面在第 {before_secs:.1f} 秒，回来后 第 {low:.1f}~{high:.1f} 秒"
+        f"（门槛：最大读数 ≥ {before_secs - tol:.1f}）")
 
 
 def motion_probe(frames=2):
@@ -425,6 +673,131 @@ def motion_probe(frames=2):
     """
     rows = burst("motion", frames, out_dir=PROBE_DIR)
     return motion_stats(centroids(rows), out_dir=PROBE_DIR)
+
+
+# 「画面没动」这个读数最多重测几次。三次的依据见 [motion_settled]：
+# 前两个测量打架时，多测一两轮基本就能让第三个测量（控制条）把话说清。
+MOTION_TRIES = 3
+
+
+def motion_settled(prefix, count, tries=MOTION_TRIES):
+    """连拍 [count] 张，回答"画面到底在不在动" → `(verdict, xs, why)`。
+
+    `verdict` 取 True / False / None：在动 / 没动 / 三个测量互相打架、判不了。
+    `xs` 是最后一次的 `centroids` 结果，供调用方继续拿几何算位置。
+
+    ## 为什么不直接 `moving(motion_stats(centroids(burst(...))))`
+
+    那条路只用**一个**测量（影片里白块的位置），而它有一个**已知的**失效模式：
+    `screencap` 会返回一两秒前的旧帧。旧帧一旦"恰好和上一帧一样"，看起来就是"停住了"
+    —— 而那正好是最危险的方向：把"量具没量到"读成"用户的应用坏了"。
+
+    `run2` 里那三条判据就是这么红掉的（`B-横屏-再播`、`B-横屏-返回后重播`）：
+    读数 `0.7 / 0.0 px/s`、质心逐帧完全相同，而同段"切后台回来没有从头重播"却是 PASS。
+    只加帧数解决不了这件事 —— 探针里最极端的一次是**连测两组各 4 帧都是同一个质心**，
+    随后"啪"地跳回正位。要解决它只能**换一个不走像素的测量**。
+
+    ## 三条读数怎么合起来定案
+
+    | 白块位置 | 应用时钟 | 控制条 | 结论 |
+    |---|---|---|---|
+    | 在动 | —— | —— | **在动**，立刻收工 |
+    | 不动 | 已经到片尾 | —— | **影片正常播完** —— 不是缺陷 |
+    | 不动 | 也不动 | —— | **真的停住 / 已播完** —— 两个独立测量一致，如实判否 |
+    | 不动 | 在走 | 量得到 | **画面冻住了** —— 截图通路是活的（见 `controls_visible`），只有影片那块不动。判否并点名 |
+    | 不动 | 在走 | 量不到 | 截图通路陈旧 → **重测**，不拿这个读数当结论 |
+    | 不动 | 读不到 | —— | 说不清 → **重测** |
+
+    重测 [tries] 轮仍停在"说不清"那一格时返回 `None`。调用方要把 `None` 记成**失败**
+    （"读不到是常态，不能当成通过"），但说明里必须写清是**量具没能定案**，
+    而不是"应用坏了" —— 这两句话给用户的信息完全不同。
+    """
+    xs, st, tried = None, None, 0
+    while tried < tries:
+        tried += 1
+        rows = burst(prefix, count)
+        xs = centroids(rows)
+        st = motion_stats(xs)
+        bars = sum(1 for _, a in rows if a is not None and controls_visible(a))
+        W.log(f"    第 {tried} 次连拍：{motion_text(st)}"
+              f"（{bars}/{len(rows)} 帧里控制条在）")
+        if moving(st):
+            return True, xs, f"画面在动 —— {motion_text(st)}"
+
+        # 画面没动。**不能就此判否**：先问另外两个测量。
+        #
+        # 控制条收起时 a11y 树里根本没有那个 `m:ss`，所以先把它叫回来。
+        # 用 `reveal_controls()` 的**返回值**读时钟，而不是再 dump 一次：
+        # 那一次 dump 的树里按钮和时钟都在，多 dump 一次只会给控制条
+        # 那 3.5 秒的自动收起留出空隙（两次 dump 加起来就超过 3.5 秒了）。
+        #
+        # 两次读数之间自然隔着一次 dump（2~4 秒），远大于时钟 1 秒的显示精度，
+        # 所以"两次读到同一个值"足以说明它没在走 —— 不需要额外 sleep。
+        ns0 = reveal_controls()
+        ns1 = reveal_controls()
+        c0, c1 = clock_of(ns0), clock_of(ns1)
+        ended = at_video_end(ns0) or at_video_end(ns1)
+        verdict, why = settle_verdict(False, bars, c0, c1, motion_text(st), ended)
+        if verdict == "retry":
+            W.log(f"    ⚠ {why} —— 重测")
+            continue
+        if verdict in ("frozen", "ended"):
+            W.log(f"    ⚠ {why}")
+        else:
+            W.log(f"    {why}")
+        return False, xs, why
+
+    return None, xs, (f"连测 {tries} 次都是'白块没动'，而应用时钟始终读不到，"
+                      f"没法交叉验证 —— 量具没能定案，按失败记录")
+
+
+def settle_verdict(pixel_moving, bars, c0, c1, pixel_text="白块没动", at_end=False):
+    """三条读数 → `(判定, 说明)`。
+
+    判定 ∈ {"moving", "retry", "stopped", "frozen", "ended"}。
+
+    ## 判定表（就是 `motion_settled` 里那张，抽出来是为了**能被自测**）
+
+    | 白块位置 | 应用时钟 | 控制条 | 判定 |
+    |---|---|---|---|
+    | 在动 | —— | —— | `moving` |
+    | 不动 | 位置已到片尾 | —— | `ended` —— **影片正常播完**，不是坏了 |
+    | 不动 | 也不动 | —— | `stopped` —— 两个独立测量一致，确实没在播 |
+    | 不动 | 在走 | 量得到 | `frozen` —— 截图通路是活的，只有影片那块不动 |
+    | 不动 | 在走 | 量不到 | `retry` —— 截图通路本身陈旧，这个读数作废 |
+    | 不动 | 读不到 | —— | `retry` —— 说不清 |
+
+    抽成纯函数不是为了让代码好看：这条判据的五个分支里有四个是**我在真机上
+    撞过现场才写出来的**，而它们各自对应一句给用户完全不同的话
+    （"真的停"、"画面冻住了"、"影片播完了"、"量具没量到"）。只有让它能被自测
+    逐一钉住，以后才不会有人顺手把 `retry` 合并进 `stopped` ——
+    那等于把量具的锅扣给应用。
+
+    ## `ended` 为什么必须单列
+
+    真机上撞到过（2026-09-18 `_probe_pause.py duel`）：影片播到片尾之后
+    **画面当然不再变化**，而那一刻 a11y 树里可能一个时间都读不到
+    （控制条被探针自己的点击收起了，只剩画面正中那个「播放」键）。
+    没有这一支，这件事会被判成 `retry` → 用完重试 → 记红，
+    而红出来的那句话是"量具没能定案"，看的人只会去查应用。
+    """
+    if pixel_moving:
+        return "moving", ""
+    if at_end:
+        return "ended", (f"控制条显示位置已经到片尾（{c0} = 总时长 {c1}）"
+                         f" —— 画面不动是因为**影片播完了**，不是读取器坏了；"
+                         f"这一步没验到要验的东西（用例没安排好）")
+    if c0 is None or c1 is None:
+        return "retry", "应用时钟读不到，说不出是截图陈旧还是真的停"
+    if c0 != c1:
+        if bars == 0:
+            return "retry", (f"应用时钟在走（{c0} → {c1}）而白块没动，且这批帧里"
+                             f"控制条一次都没出现 —— 截图通路本身是陈旧的")
+        return "frozen", (f"{pixel_text}，但应用自己报的播放位置在走"
+                          f"（{c0} → {c1}）、控制条也量得到（{bars} 帧）"
+                          f" —— 截图通路是活的，只有影片那块不动：画面真的冻住了")
+    return "stopped", (f"{pixel_text}，应用自己报的播放位置也停在 {c0}"
+                       f" —— 两个独立测量一致，确实没在播")
 
 
 def grid_filled(a):
@@ -476,6 +849,74 @@ def band_of(a):
     x0, x1 = int(cols[0]), int(cols[-1])
     return {"y0": y0, "y1": y1, "h": y1 - y0 + 1,
             "x0": x0, "x1": x1, "w": x1 - x0 + 1}
+
+
+# 控制条所在的那条横带（屏幕坐标）。取 2100..2400 是因为控制条贴屏幕底边：
+# 实测横屏那一轮 SeekBar 的节点是 y[2205,2321]、时间文字在它同一行。
+CONTROLS_BAND_Y0, CONTROLS_BAND_Y1 = 2100, 2400
+
+# 控制条"在不在"的亮像素阈值（只看上面那条带里的**非纯黑**像素个数）。
+#
+# 2026-09-18 拿 `dist/evidence/v112-release/` 那批现场帧标出来的，读数分得很开：
+#
+#     控制条已收起 → 2828（就是系统手势条那点像素，恒定）
+#     控制条已展开 → 34413 / 34429 / 34900 / 34942 / 35390（`19-R-横屏-已暂停` 等）
+#
+# 阈值取两侧的**几何中点**（√(2828×34413) ≈ 9865 取整到 10000），
+# 这样两边的相对余量一样大：34413/10000 = 3.4 倍、10000/2828 = 3.5 倍。
+#
+# 第一次取的是 5000（"离收起 1.8 倍"），被自测当场拦下 ——
+# `tools/motion/selftest_motion_settled.py` 的 D 段要求两侧各有 3 倍余量。
+# 留 3 倍不是洁癖：这条读数只在"两个主测量打架"时才被问到，
+# 而它一旦答错方向，量具就会把陈旧读数判成"画面真的冻住了" —— 把锅扣给应用。
+CONTROLS_PIXELS = 10000
+
+# 这一帧"是不是看片页"的门槛：整幅的**强白**像素个数上限。
+#
+# 看片页是黑底 + 一条影片，实测强白只有 19110~31195（`B-横屏-播放中-*`、
+# `19-R-横屏-已暂停`、`20-R-横屏-拖到30%`）；而媒体库、空库、选图器那类页面
+# 整屏都是浅色，强白 1.58M~2.55M。两者差两个数量级，取 150000 居中。
+#
+# 为什么要这道闸门：底下那个"控制条在不在"的判据在**非看片页**上会**因为错误的
+# 原因**为真 —— 媒体库下半屏本来就亮着（实测 324000），会被读成"控制条在"。
+# 一个能因为别的原因成立的条件，不能用来当"截图通路是活的"的证据。
+VIEWER_MAX_BRIGHT = 150000
+
+
+def controls_visible(a):
+    """这一帧里**控制条**在不在。用来证明"截图通路此刻是活的"。
+
+    ## 它是第三个独立测量，补的正是前两个都补不上的那个洞
+
+    前两个测量是"影片里白块的位置"和"应用自己报的播放位置（`m:ss`）"。
+    当它们**打架**（时钟在走、白块不动）时，有两种完全不同的可能，
+    只看这两个永远分不开：
+
+    1. **截图通路陈旧** —— 报出来的那张图是一两秒前的旧帧，所以"没动"是假的。
+       这是**量具的锅**，不该判用户的应用失败。
+    2. **画面真的冻住了** —— 截图通路是活的、只有影片那块不动。
+       这是**应用或宿主机侧的事**，必须如实报红。
+
+    控制条提供了一个跟影片内容无关、但同样"只在屏幕上"的读数：
+    它由 Compose 直接画在窗口图层上，**不经过影片的 Surface**，却要经过同一条
+    截图通路。所以"轻点画面 → 控制条出现 → 这一帧里量得到它"就证明了
+    截图通路当下是活的；在这种前提下影片那块仍然不动，才是真的冻住。
+
+    ## 为什么用"非纯黑像素个数"而不是找某个控件
+
+    控制条收起时屏幕下半部是**纯黑**，只剩系统手势条那 2828 个像素；
+    展开时会多出进度条与时间文字，读数直接跳到三万四以上（实测值见上面常量）。
+    两者相差一个数量级，不需要认控件形状，也就不会被布局微调弄坏。
+
+    ## 先确认这一帧是看片页，再说控制条的事
+
+    见 [VIEWER_MAX_BRIGHT]：不看这一步，媒体库那类页面下半屏本来就是亮的，
+    会被读成"控制条在" —— 那是**因为错误的原因**为真，不能当证据用。
+    """
+    if int((a > 120).all(axis=2).sum()) > VIEWER_MAX_BRIGHT:
+        return False
+    sub = a[CONTROLS_BAND_Y0:CONTROLS_BAND_Y1, :, :].astype(np.int16)
+    return int(((sub > 60).any(axis=2)).sum()) > CONTROLS_PIXELS
 
 
 def square_of(a, band):
@@ -535,6 +976,20 @@ def describe(band, sq, blk):
 
 
 # ==================== 存储层证据 ====================
+
+def is_debuggable():
+    """`run-as` 只对 debuggable 的包开放 —— 由此判断沙箱类判据做不做得了。
+
+    2026-09-17 在 release 包上实测：`run-as` 被系统拒绝
+    （`package com.fpb.vault is not debuggable`），[attachments] 于是**恒返回空**。
+    同一轮里页头「· 2 项」、时长角标、播放几何全过，唯独三条沙箱判据报红；
+    而"删除后密文消失"那条反而**恒绿**（它的断言就是 `len(files) == 0`）。
+
+    恒绿比恒红危险 —— 所以沙箱类判据一律先过这道闸，判不了就报「不适用」。
+    """
+    out = sh("shell", "run-as", PKG, "id")
+    return "uid=" in out and "not debuggable" not in out
+
 
 def attachments():
     """沙箱里 `files/attachments/` 下的文件（名 → 字节数）。
@@ -617,7 +1072,7 @@ def specs_for_size(size_on_disk):
     文件总长不符）看起来像"加密写错了"。宁可在认领这一步就响亮地失败。
 
     不能按"体积小的当横屏、大的当竖屏"排序配对 —— 那只是旧素材的巧合
-    （横屏 10 秒确实比竖屏 8 秒短）。横屏加到 60 秒之后大小关系反转，
+    （横屏 10 秒确实比竖屏 8 秒短）。横屏加到 60 秒、后来又加到 120 秒之后大小关系反转，
     于是横屏那份密文被拿竖屏的期望值去验，报出来的是
     "plainSize 不符 + 文件总长不符"：看着像加密写错了，其实是配错了对象。
 
@@ -746,15 +1201,38 @@ def await_picker(timeout=180):
             W.tap(dismiss["cx"], dismiss["cy"])
             time.sleep(1.2)
             continue
-        cells = picker_cells(ns)
         _, im = grab("_picker_probe")
         blobs = picker_red_blobs(im)
         if grid_filled(im):
+            # **格子必须重新 dump 一次，不能复用上面那份 [ns]。**
+            #
+            # ns 是"截图**之前**"的快照，而这里的判定用的是截图**之后**的像素。
+            # 抽屉刚把网格铺上来的那一瞬，两者会不一致：像素说"有图了"、
+            # 节点树里还一个格子都没有 —— 于是报出"网格已加载、可勾格子 0 个"，
+            # 而那时屏幕上明明有一整屏缩略图。
+            #
+            # 2026-09-17 实测（v1.0.9 release 包冷启动后第一次开选图器）：
+            # 走到 `tap_one_photo` 才炸在"选图器里没有非红的格子（可勾 0、红 0）"。
+            # 事后对同一屏取证的节点树是 9 个可点无文案的格子、y 落在 [923,2003]，
+            # **完全满足 [picker_cells] 的判据** —— 说明不是判据太严，是那份快照太旧。
+            # 这与坑 13（`dump` 是几秒前的快照）是同一个根因，只是这次它咬的是
+            # "用新像素下结论、却用旧节点取数据"这个组合。
+            cells = picker_cells(rnodes())
+            if not cells:
+                # 像素说"有图了"、节点树里却一个格子都没有 —— 两者不一致时
+                # **不要就这么返回**：上层拿到的会是一个空列表，然后炸在
+                # "找不到非红的格子 / 找不到可点的格子"之类的地方，
+                # 看起来像产品问题，实际是这一轮的取样还没对齐。
+                W.log(f"    第 {rounds} 轮：像素判定网格已加载，但节点树里还没有可勾格子，继续等")
+                time.sleep(1.5)
+                continue
             W.log(f"    选图器网格已加载（等了 {time.time() - started:.0f}s / {rounds} 轮）："
                   f"可勾格子 {len(cells)} 个、红色缩略图 {len(blobs)} 个")
             if os.path.exists(probe):
                 os.replace(probe, keep)
             return cells, blobs, im
+        # 还没铺满，留一份快照供超时路径诊断用（正常路径不会用到它）
+        cells = picker_cells(ns)
         time.sleep(1.5)
     W.log(f"    （等了 {timeout} 秒仍然没有缩略图：这台设备的相册没同步上，"
           f"不是应用侧的问题）")
@@ -769,9 +1247,22 @@ def picker_cells(ns):
     系统 picker 的格子是无语义的可点节点，且**顶栏也有无语义的可点节点**
     （返回箭头），所以按 y 区间分段 —— 网格在屏幕中段。
     实测 picker 顶栏到 y≈250、底部按钮区从 y≈2150 起。
+
+    ## 还要按尺寸滤一道（第三处竞态的产物）
+
+    抽屉样式的 picker（v1.0.9 那条路走的就是它）在网格**上方**还有一层自己的表头：
+    拖拽条 + `Photos`/`Collections` 分段 + 溢出菜单。那几个控件同样"可点、无文案"，
+    而且 y 落在同一个区间里（实测约 [601,855]）—— 只按 y 分段会把它们当成格子。
+    2026-09-17 实测：`cand[0]` 取到了最上面那个 **126×127** 的表头控件，
+    点上去当然不会出现"完成"按钮，而报出来的是"选中一张照片之后没有出现确认按钮"。
+
+    缩略图是接近正方形的：1080 宽屏三列时约 **358×358**；表头控件只有 126 px 上下。
+    取屏宽的 1/4（=270）作门槛，两边都有余量。
     """
+    floor = VIEW_W // 4
     return [n for n in ns if n["clickable"] and not (n["text"] or n["desc"])
-            and 300 < n["y1"] and n["y2"] < 2150]
+            and 300 < n["y1"] and n["y2"] < 2150
+            and n["w"] >= floor and n["h"] >= floor]
 
 
 def picker_red_blobs(a):
@@ -874,36 +1365,95 @@ def reveal_controls(rounds=6):
 def tap_pause():
     """把影片点成**暂停**，返回 (暂停后的节点树, 是否演示出了「在播 → 停住」)。
 
-    ## 为什么不"dump 读到「暂停」再点它"
+    ## 这条路断过：两个时间尺度刚好撞在边上（2026-09-18）
 
-    控制条在**播放中只亮 3.5 秒**，而一次 `uiautomator dump` 要 2~3 秒。
-    于是"读到按钮 → 点下去"这条路上，落点还在不在完全看 dump 有多快 ——
-    两次实测给了对照：dump 用 2.2 秒那一轮**点中了**，用 3.3 秒那一轮**点空了**，
-    而点空的那一下打在外层 Box 上（轻点画面是 toggle），反而把控制条重新打开，
-    看起来就像"点了暂停没反应"。而且**重试也救不了**：每次重试都得先 dump，
-    落点又过期。这是结构性的竞态，不是运气问题。
+    上一版是"dump 只问一次按钮在哪 → 点一下 → 用截图确认停住"。它在 v110/v111
+    那几轮是绿的，2026-09-18 的 release 验收却连红 6 条。现场读数：
 
-    ## 现在的写法
+        第 1 次点击后：4 个读数 → 7.7 px/s（还在播）
+        第 2 次点击后：4 个读数 → 0.0 px/s
+        （按钮已收起，本次只有像素一个测量 — 未能交叉验证）
+        暂停后连拍（4 帧）：8.5 px/s → 全速
 
-    1. dump **只问一次按钮在哪**（布局固定，坐标不会变）；
-    2. 之后"点坐标 → 用**截图**判断停了没有"，中间不再插入 dump。
-       `screencap` 只要 0.3~0.9 秒，整个动作落在控制条亮着的窗口里。
+    根因是**两个时间尺度撞在一起**，而且撞在临界点上：
 
-    连点同一个坐标是安全的：第一次若落在已经收起的控制条上，那一下等于点了画面
-    （toggle），会把控制条**打开**；0.4 秒后的第二下就必然落在按钮上。
+      · 控制条在播放中**只在轻点之后亮 [CONTROLS_LIFE_S] 秒**（app 侧
+        `CONTROLS_TIMEOUT_MS`，见 ImageViewerScreen）；
+      · 定位按钮要 `uiautomator dump`，**2~4 秒**（随模拟器负载浮动）。
 
-    ## 返回的第二项由像素给出，不由节点给出
+    于是"dump 出来的落点还有没有效"完全看 dump 有多快。两次实测构成对照：
 
-    先确认暂停前画面在动（这是"正在播放"的定义），再确认按下之后不动了 ——
-    比读一个可能已经过期的节点可靠。影片若本来就没在播（已经播完、或已停住），
-    这一项就是 False，调用方那条"前提不成立"的判据会响亮地失败，
-    而不是被"按钮本来就是播放"顶成一个假通过。
+      · v111 那轮 dump 用 **2 秒** → 叫出来 + 2 秒 = 3.0 < 3.5 → **点中了**；
+      · audit5 这轮 dump 用 **4 秒** → 5.0 > 3.5 → **点空了**，而落空的那一下打在
+        外层 Box 上（轻点画面是 toggle），只是把控制条又打开一次。
+
+    更隐蔽的是：**真正的按钮点击永远轮不到**。上一次点击刚把控制条打开，
+    下一次点击已经隔了 4 秒（那时它又收起了）—— 这正是"点了三下、一下没中"的来源。
+    这不是运气问题，是结构性竞态。
+
+    2026-09-18 用短间隔对照实验在真机上把这两件事分开了（`tools/_probe_pause.py`）：
+    轻点叫出控制条后 0.6 秒内点按钮坐标，画面**当场停住**、按钮翻成「播放」、
+    画面正中还多出那个播放键 —— 坐标是对的、应用也是好的，坏的是落点的时效。
+
+    ## 现在的写法：同一个坐标连点两下，再用按钮的字判定
+
+    坐标一旦拿到就不会变（布局固定），所以定位只做一次。之后每轮：
+
+    1. **连点两下**（间隔 [TAP_GAP_S]，远小于控制条的存活时间）：
+       · 控制条**已收起** → 第一下是 toggle（把它叫出来），第二下落在按钮上 → 暂停；
+       · 控制条**亮着**   → 第一下就落在按钮上（暂停），第二下会把影片又播起来。
+    2. **dump 一次，看按钮的字**。两种起始状态各自收敛，最坏多花一轮。
+
+    第二种情况说明"连点"不是无条件的正确姿势 —— 所以**不拿"点过了"当结论**。
+    连点间隔与存活时间的耦合写成了一条断言（见函数体开头），改其中一个数会当场炸，
+    而不是留到走查里变成"点了没反应"。
+
+    ## 为什么不再用像素判"停住"
+
+    上一版把"位移是 0"当成暂停成功的证据，而**同一段里 3 秒后的 4 帧读数又是全速** ——
+    同一次走查给出了两个相反的像素结论（见 `dist/evidence/audit5/README.md`）。
+    像素在这一步只能证伪、不能证成：4 帧全同既可来自"真的停了"，也可来自一次瞬时卡顿，
+    它没有"按钮翻了字"这个维度。
+
+    所以分工是：
+
+      · **这里**只负责「让它停下」，判据是**节点树**（按钮从「暂停」翻成「播放」）；
+      · **像素**负责「解码器有没有真的停」，由调用方在暂停之后再连拍一次来判。
+
+    两个测量各自独立、缺一不可：界面状态翻了而解码器没停，调用方那条会红。
+
+    ## 读不到按钮 **不等于** 暂停成功
+
+    暂停之后控制条**常驻**，所以"读不到按钮"只说明这次 dump 没拿到（窗口动画期、
+    或 dump 失败），**不能**当成通过。上一版留了一个口子 —— 读不到按钮就记一句
+    "未能交叉验证"然后照常返回 —— 而"读不到"恰恰是常态，那条防线等于不设防。
+    现在读不到就再来一轮。
+
+    ## `before` 为什么取 4 帧
+
+    2026-09-17 那次假 FAIL 逼出来的读数（当时夹具还是 60 秒那版，速度真值 16.7 px/s）：
+
+        暂停前快测（2 帧）：位移 6.9px / 0.86s → 8.0 px/s（门槛 8）→ 判为"没在动"
+        同一轮同一段影片的另外三处（5~8 帧）：16.6 / 16.9 / 17.3 px/s
+
+    画面**确实在播**，而 2 帧的估计把它算低了一半：`motion_stats` 的位移取
+    `max - min`，样本只有 2 个时任何一个质心读偏，整段位移就跟着偏 —— 没有第三个点
+    把它拉回来。`before` 只测画面、不读节点，没有"必须落在控制条那 3.5 秒里"的约束，
+    所以可以多花点时间换准确度。
+
+    它现在跑在 [reveal_controls] **之后**（因为"在不在播"要跟按钮的字对起来看），
+    但那不影响它 —— [reveal_controls] 只轻点画面开关控制条，不动播放状态。
+    `BEFORE_TRIES` 次都读不到运动就当作"这一组结论不成立"，见函数体里的说明。
     """
-    before = motion_probe(2)
-    was_moving = moving(before)
-    W.log(f"    暂停前快测：{motion_text(before)}"
-          f" → {'在播' if was_moving else '没量到运动'}")
+    # 连点间隔与"控制条活多久"是一对耦合的数：间隔必须远小于存活时间。
+    # 写成断言是为了改其中一个数时当场炸，而不是留到走查里变成"点了没反应"。
+    assert TAP_GAP_S < CONTROLS_LIFE_S / 2, \
+        f"连点间隔 {TAP_GAP_S}s 太接近控制条存活时间 {CONTROLS_LIFE_S}s"
 
+    # ---- 先确认"此刻真的在播"，并且让**画面**留下一条活的读数 ----
+    #
+    # 主判据是按钮的字：「暂停」= 应用认为自己在播。视频播完时按钮是「播放」，
+    # 那时下面"点完变成播放"那条断言会自己满足自己 —— 这正是这个前提要挡住的。
     ns = reveal_controls()
     hit = next((n for n in ns if n["desc"] == "暂停"), None)
     if hit is None:
@@ -913,18 +1463,109 @@ def tap_pause():
             W.log("    ⚠ 控制条始终读不到，连按钮位置都拿不到，无法执行暂停")
         return ns, False
 
-    coords = (hit["cx"], hit["cy"])
-    W.log(f"    「暂停」键在 {coords}；之后只点这个坐标，不再 dump")
+    # 画面也必须留下一条**活的**读数 —— 后面"点完停住"用的就是画面。
+    #
+    # 画面有一个已知的失效模式：`screencap` 会返回一两秒前的陈旧帧。
+    # 2026-09-18 实测到最极端的一次（`_probe_pause.py track`）：应用时钟已经走到
+    # 约 0:52，屏幕上还是**片内第 0.97 秒**那一帧，连测两组 4 帧都是同一个质心；
+    # 下一个读数"啪"地跳回 454px（≈54 秒处）。陈旧只持续一两秒，所以给它几次机会。
+    #
+    # 不重试的后果很具体：若画面本来就是死的，后面"停住"会拿一张死画面当证据，
+    # 那条判据就成了假通过 —— 而它正是这个走查里唯一能看出"解码器没停"的地方。
+    was_moving = False
+    for attempt in range(1, BEFORE_TRIES + 1):
+        before = motion_probe(4)
+        was_moving = moving(before)
+        W.log(f"    暂停前快测（第 {attempt} 次）：{motion_text(before)}"
+              f" → {'在播' if was_moving else '没量到运动'}")
+        if was_moving:
+            break
+    if not was_moving:
+        W.log(f"    ⚠ 按钮显示「暂停」（应用认为在播），画面却连测 {BEFORE_TRIES} 次都没动 ——"
+              " 两个测量矛盾，这一组的结论不成立")
+        return ns, False
 
-    for attempt in range(1, 4):
+    # ---- 唯一的一条路：点控制条上的「暂停」按钮 ----
+    #
+    # 这里原先还有一条排在更前面的"媒体键"捷径，2026-09-18 删掉了。
+    # 它在这个应用上**机制上不可能成功**：媒体按键要被投递到 `MediaSession` 才有目标，
+    # 而全工程 `grep MediaSession|onKeyEvent` 零命中、`build.gradle.kts` 里零 media 依赖，
+    # 播放器是裸 `android.media.MediaPlayer` + `SurfaceView`。
+    #
+    # 真正有害的不是它不生效，而是它**看起来生效了**：它靠一次像素读数确认"停住了"，
+    # 而像素读数会陈旧（见上）—— 于是流程认定成功、直接返回，
+    # **再也没走下面这条本来能用的路**，而那之后正式测量（4 帧）读到的是全速播放。
+    coords = (hit["cx"], hit["cy"])
+    W.log(f"    「暂停」键在 {coords}；落点固定（布局不会变），之后只点这个坐标")
+
+    for round_no in range(1, MAX_PAUSE_ROUNDS + 1):
+        # 连点两下：第一下若落在已收起的控制条上就是"把它叫出来"，
+        # 第二下才落在按钮上；若控制条本来就亮着，第一下就中。
         W.tap(*coords)
-        time.sleep(0.4)
-        after = motion_probe(2)
-        W.log(f"    第 {attempt} 次点击后：{motion_text(after)}")
-        if still(after):
-            return rnodes(), was_moving
-    W.log("    ⚠ 连点三次都没能让画面停住")
+        time.sleep(TAP_GAP_S)
+        W.tap(*coords)
+        time.sleep(0.6)
+        ns2 = rnodes()
+        descs = [n["desc"] for n in ns2 if n["desc"] in ("播放", "暂停")]
+
+        # 判定只看**按钮的字**，不看"点过了"：
+        #   · 暂停后画面正中会多出一个播放键，加上控制条上那个，通常是两个「播放」；
+        #   · 还在播时控制条上是「暂停」，没有任何「播放」。
+        if "暂停" in descs:
+            W.log(f"    第 {round_no} 轮后按钮仍是「暂停」（{descs}）—— 还在播，再来一轮")
+            continue
+        if not descs:
+            # 读不到按钮 **不是** 成功。暂停之后控制条常驻，读不到只说明这次 dump
+            # 没拿到（窗口动画期、或 dump 失败）—— 上一版就是在这里放行的。
+            W.log(f"    第 {round_no} 轮后读不到播放/暂停按钮 —— 无法确认，再来一轮")
+            continue
+        W.log(f"    第 {round_no} 轮后按钮变成「播放」：{descs}")
+        return ns2, was_moving
+
+    W.log(f"    ⚠ 连试 {MAX_PAUSE_ROUNDS} 轮都没能让按钮翻成「播放」")
     return rnodes(), False
+
+
+def clocks_of(ns):
+    """节点树里所有 `m:ss` 文本，按树里的先后顺序。控制条上是 `[位置, 总时长]`。
+
+    拆出"全部"而不只是"第一个"，是为了能判**影片是不是已经播完**：
+    位置 == 总时长就是播到了片尾。这件事必须能判出来 ——
+    真机上撞到过（2026-09-18，`_probe_pause.py duel`）：影片播完后画面自然不再变化，
+    而那一刻 a11y 树里可能一个时间都读不到（控制条被探针自己的点击收起了，
+    只剩画面正中那个「播放」键），于是旧判据会把**正常播完**记成"读取器坏了"。
+    """
+    out = []
+    for n in ns:
+        t = (n["text"] or "").strip()
+        if re.fullmatch(r"\d+:\d\d", t):
+            out.append(t)
+    return out
+
+
+def clock_of(ns):
+    """节点树里那个 `m:ss` 播放位置；读不到返回 None。
+
+    它是唯一直接读**播放器本体**的测量：界面上的位置来自
+    `MediaPlayer.currentPosition`，每 250ms 轮询一次（app 侧 `POSITION_POLL_MS`）。
+    另外两个测量（影片白块的位置、控制条在不在）读的都是**屏幕上是什么**，
+    而这个读的是**播放器认为自己在哪** —— 两者正好是"画面冻住"这件事的两端，
+    所以它们打架的时候能定案。见 `motion_settled` 的判定表。
+    """
+    cs = clocks_of(ns)
+    return cs[0] if cs else None
+
+
+def at_video_end(ns):
+    """控制条上的位置是不是已经到片尾（位置 == 总时长，且总时长不为 0）。
+
+    读不全返回 False —— "判不出来"不能当成"已经播完"，否则一条正常的失败
+    会被这句话解释掉（那正是这个项目里最不能容忍的一类假绿）。
+    """
+    cs = clocks_of(ns)
+    if len(cs) < 2:
+        return False
+    return cs[1] != "0:00" and cs[0] == cs[1]
 
 
 def current_page():
@@ -982,7 +1623,7 @@ def open_cell_by_label(label):
 
     角标在格子左下角、本身不可点，点它会穿透给格子的点击区域。
     用它定位而不是"第 N 格"，是因为网格顺序取决于落库顺序，
-    而时长是从容器里读出来的**事实** —— 1:00 的那段就是横屏那一段。
+    而时长是从容器里读出来的**事实** —— 2:00 的那段就是横屏那一段。
     """
     hit = next((n for n in rnodes() if n["text"] == label), None)
     assert hit is not None, f"网格里找不到时长角标 {label}"
@@ -1039,9 +1680,8 @@ def run_phase_a():
     """对照轮：出货版 v1.0.9 看不到任何视频。"""
     W.log("================ 对照轮 · 出货版 v1.0.9（图库只认图片） ================")
     W.log(f"安装 {APK_OLD}")
-    sh("uninstall", PKG)
-    out = sh("install", "-r", "-g", APK_OLD)
-    assert "Success" in out, f"安装失败：{out}"
+    uninstall_pkg()
+    install_apk(APK_OLD)
     ver = installed_version()
     W.log(f"    设备上装的是 {ver}")
     assert "1.0.9" in ver, f"对照包应是 1.0.9，实际 {ver}"
@@ -1117,12 +1757,24 @@ def warm_up_uiautomator():
 
 def run_phase_b():
     """验证轮：本次实现版。"""
-    W.log("================ 验证轮 · 本次实现版（debug） ================")
+    # 这一轮的包**可能是 release 包**（验收脚本会把 APK_NEW 指过去），那时
+    # `run-as` 会被系统拒绝，沙箱类判据就做不成 —— 先问一次，
+    # 让下面那些判据自己决定"验"还是"报不适用"。
+    # 日志里原来写死"（debug）"，指到 release 包时就成了名实不符，一并去掉。
+    W.log("================ 验证轮 · 本次实现版 ================")
     W.log(f"安装 {APK_NEW}")
-    sh("uninstall", PKG)
-    out = sh("install", "-r", "-g", APK_NEW)
-    assert "Success" in out, f"安装失败：{out}"
+    uninstall_pkg()
+    install_apk(APK_NEW)
     W.log(f"    设备上装的是 {installed_version()}")
+
+    # 沙箱类判据做不做得了，取决于**刚装上的这个包**。
+    # 2026-09-17：这一句原来写在安装**之前**，问的是上一个包 —— 于是在 debug 包上
+    # 单独跑这一轮时，四条沙箱判据全被报成「不适用」，而它们本可以做。
+    # （在验收脚本里因为上一个包正好是 release，结论凑巧对了，所以一直没暴露。）
+    # 判"能不能"的闸门必须设在"装完之后"。
+    SANDBOX_OK = is_debuggable()
+    W.log("    沙箱类判据：" + ("验" if SANDBOX_OK else
+                              "报「不适用」（这个包不可调试，run-as 被系统拒绝）"))
 
     warm_up_uiautomator()
     V105.onboarding()
@@ -1164,39 +1816,50 @@ def run_phase_b():
           f"实测角标 {sorted(labels)}")
 
     # ---- 3. 存储层：落盘格式 ----
-    files = attachments()
-    W.log(f"沙箱 files/attachments/ 下有 {len(files)} 个文件："
-          + "，".join(f"{k[:8]}…={v}B" for k, v in files.items()))
-    check("沙箱里确实落盘了两个附件密文", len(files) == 2, f"{len(files)} 个")
+    #
+    # 这一段要靠 `run-as` 进沙箱读密文，而 release 包（`android:debuggable=false`）
+    # 上 `run-as` 被系统拒绝 —— 判不了就明确报「不适用」，绝不留下恒真的绿。
+    if SANDBOX_OK:
+        files = attachments()
+        W.log(f"沙箱 files/attachments/ 下有 {len(files)} 个文件："
+              + "，".join(f"{k[:8]}…={v}B" for k, v in files.items()))
+        check("沙箱里确实落盘了两个附件密文", len(files) == 2, f"{len(files)} 个")
 
-    # 把"哪个 blob 是哪段影片"对上：**按落盘体积认领**，不按大小排序配对
-    # （原因见 specs_for_size：横屏加长之后大小关系会反转，配对就错了）。
-    claimed, counts = {}, {}
-    for blob_id, size in files.items():
-        cands = specs_for_size(size)
-        if len(cands) != 1:
-            # 0 个 = 体积对不上任何素材；2 个 = 两条素材落在**同一个块数档位**
-            # （都小于 1 MiB 时必然如此），这时认领是猜的，必须停下来。
-            hint = (
-                " —— 两段素材的块数相同（"
-                + "、".join(f"{s['tag']}={blob_chunks(s['plain_bytes'])} 块"
-                            for s in CLIPS.values())
-                + "），落盘体积因此无法区分，素材需要重做" if len(cands) > 1 else "")
-            check("每个附件的落盘体积都能唯一对上某一段素材", False,
-                  f"{blob_id[:8]}… 是 {size}B，对上 {[c['tag'] for c in cands]}"
-                  f"（应为 1 个）{hint}")
-            continue
-        spec = cands[0]
-        claimed[spec["tag"]] = blob_id
-        n = verify_stored_video(blob_id, size, spec)
-        if n is not None:
-            counts[spec["tag"]] = n
-    check("两段影片各自对上自己的素材（不是互相配错）",
-          len(claimed) == 2, f"认领到 {sorted(claimed)}")
-    # 一段素材如果只有一块，随机读取永远落在第 0 块里 —— 跨块边界的偏移算术、
-    # 块号参与 AAD、末块标记，这三样**一个都不会被走到**。所以这条不是凑数判据。
-    check("至少有一段素材在设备上落成多块（跨块读取才真的被走过）",
-          len(counts) == 2 and max(counts.values()) >= 2, f"各段块数 {counts}")
+        # 把"哪个 blob 是哪段影片"对上：**按落盘体积认领**，不按大小排序配对
+        # （原因见 specs_for_size：横屏加长之后大小关系会反转，配对就错了）。
+        claimed, counts = {}, {}
+        for blob_id, size in files.items():
+            cands = specs_for_size(size)
+            if len(cands) != 1:
+                # 0 个 = 体积对不上任何素材；2 个 = 两条素材落在**同一个块数档位**
+                # （都小于 1 MiB 时必然如此），这时认领是猜的，必须停下来。
+                hint = (
+                    " —— 两段素材的块数相同（"
+                    + "、".join(f"{s['tag']}={blob_chunks(s['plain_bytes'])} 块"
+                                for s in CLIPS.values())
+                    + "），落盘体积因此无法区分，素材需要重做" if len(cands) > 1 else "")
+                check("每个附件的落盘体积都能唯一对上某一段素材", False,
+                      f"{blob_id[:8]}… 是 {size}B，对上 {[c['tag'] for c in cands]}"
+                      f"（应为 1 个）{hint}")
+                continue
+            spec = cands[0]
+            claimed[spec["tag"]] = blob_id
+            n = verify_stored_video(blob_id, size, spec)
+            if n is not None:
+                counts[spec["tag"]] = n
+        check("两段影片各自对上自己的素材（不是互相配错）",
+              len(claimed) == 2, f"认领到 {sorted(claimed)}")
+        # 一段素材如果只有一块，随机读取永远落在第 0 块里 —— 跨块边界的偏移算术、
+        # 块号参与 AAD、末块标记，这三样**一个都不会被走到**。所以这条不是凑数判据。
+        check("至少有一段素材在设备上落成多块（跨块读取才真的被走过）",
+              len(counts) == 2 and max(counts.values()) >= 2, f"各段块数 {counts}")
+    else:
+        for _label in ("沙箱里确实落盘了两个附件密文",
+                       "每个附件的落盘体积都能唯一对上某一段素材",
+                       "两段影片各自对上自己的素材（不是互相配错）",
+                       "至少有一段素材在设备上落成多块（跨块读取才真的被走过）"):
+            skip(_label, "release 包不可调试，run-as 被系统拒绝 —— "
+                         "这一组在 debug 包那轮验过（见 v110-video 走查证据）")
 
     # ---- 4. 播放：几何 + 在播 ----
     sh("logcat", "-c")
@@ -1228,15 +1891,17 @@ def run_phase_b():
         else:
             check("画面里的正方形能量到", False, "条带里找不到白像素")
 
-        # 运动读数：连拍帧之间白块位置必须变
-        xs = []
-        for p, a2, b2 in live:
-            b = block_x(a2, b2)
-            if b:
-                xs.append((os.path.basename(p), round(b["cx"], 1)))
-        W.log(f"    连拍各帧白块质心：{xs}")
+        # 运动读数：连拍帧之间白块位置必须变。
+        #
+        # **不复用**上面那批帧了：那批只连拍一次，而单次连拍有个已知的失效模式
+        # （`screencap` 返回一两秒前的旧帧 → 一整批看起来都是静止图）。
+        # 改走 [motion_settled]：它在"像素说没动"时会拿应用时钟与控制条交叉验证，
+        # 必要时重测，而不是把量具的陈旧读数当成"用户的应用停在第一帧"。
+        # 上面那批帧照旧供条带、正方形两个几何判据使用，一行都不用改。
+        resumed0, xs, why0 = motion_settled("B-横屏-播放中", BURST_PLAY)
+        W.log(f"    连拍各帧白块质心：{xs['points']}")
         check("连拍帧之间白块位置在变 → 画面确实在播（不是停在第一帧的静止图）",
-              moving(motion_stats(xs)), motion_text(motion_stats(xs)))
+              resumed0 is True, why0)
 
     # ---- 5. 控制条：先把影片停下，再读数 ----
     #
@@ -1247,14 +1912,35 @@ def run_phase_b():
 
     # 这一条是下面那一组的**前提**：影片若已播完，按钮本来就是「播放」，
     # 于是"点完暂停后按钮变成播放"无论点不点都成立。前提不成立时要响，不要绿。
+    #
+    # 判据由两个测量合成（见 [tap_pause]）：控制条上的字说「暂停」= 应用认为自己在播，
+    # 且**画面确实在动** —— 后者是为了让下面"点完停住"那条有资格成立：
+    # 拿一张本来就死的画面去证明"停住了"，等于没证明。
     check("点暂停之前确实处于播放态（否则这一组判据会被「播完」顶成假通过）",
           did_pause,
-          "暂停前的快测量到画面在动（这是「正在播放」的定义）" if did_pause
-          else "暂停前没量到画面在动 —— 这一组的结论不成立")
+          "按钮显示「暂停」，且画面确实在动（两个测量一致）" if did_pause
+          else "按钮与画面没能同时证明「正在播放」—— 这一组的结论不成立")
 
     paused = next((n for n in ns if n["desc"] == "播放"), None)
     check("点暂停后按钮变成「播放」（状态真的切了）", paused is not None,
           f"节点 desc {[n['desc'] for n in ns if n['desc'] in ('播放', '暂停')]}")
+
+    # 第三个独立测量：**应用自己报的播放位置**。
+    #
+    # 像素那个测量有一个已知的失效模式（`screencap` 会返回一两秒前的陈旧帧，
+    # 见 [tap_pause] 里那组实测）。陈旧一旦"和上一帧一样"，看起来就是"停住了" ——
+    # 而那正是最危险的方向：**解码器还在跑、界面说停**，像素看不出来。
+    # 时钟看得出来，而且它不走像素这条路：`positionMs` 每 250ms 从
+    # `MediaPlayer.currentPosition` 读一次，播放器只要还在走，这个数就会变。
+    #
+    # 比的是"两次读数是否相同"，所以不受文案格式影响。2 秒足够 ——
+    # 显示精度是 1 秒，播放中 2 秒必然跨过至少一个整秒。
+    clock_before = clock_of(ns)
+    time.sleep(CLOCK_SETTLE_S)
+    clock_after = clock_of(rnodes())
+    check("暂停后应用自己报的播放位置不再前进（第三个独立测量：像素会陈旧，时钟不会）",
+          clock_before is not None and clock_before == clock_after,
+          f"{clock_before} → {clock_after}")
 
     # 画面里的白块必须真的停住：按钮变成「播放」只说明 Compose 的状态翻了，
     # **解码器有没有停**才是画面上的事实。
@@ -1306,7 +1992,7 @@ def run_phase_b():
     # 传到落点上约 1 秒，远小于 ±3 秒的容差，够用。
     #
     # 位置取 30% 而不是 70%：紧接着还有"恢复播放 → 切后台再回来 → 再验一次在播"，
-    # 那一段要留足剩余片长（60 秒的 30% 处还剩 42 秒）。
+    # 那一段要留足剩余片长（120 秒的 30% 处还剩 84 秒）。
     total_s = spec_l["duration_ms"] / 1000.0
     if slider is not None:
         w = slider["w"]
@@ -1416,14 +2102,20 @@ def run_phase_b():
     if play_btn is not None:
         W.tap(play_btn["cx"], play_btn["cy"])
         time.sleep(0.5)
-    rows = burst("B-横屏-再播", BURST_PAUSE + 2)
-    xs = centroids(rows)
-    W.log(f"    恢复播放后各帧白块质心：{xs}")
+    # 三条读数合起来定案（白块位置 + 应用时钟 + 控制条），**不能只看白块位置**：
+    # `screencap` 会返回旧帧，"连续几帧质心相同"于是既可能是"真的停"
+    # 也可能是"一帧没换"。见 [motion_settled] 里那张判定表。
+    resumed, xs, why = motion_settled("B-横屏-再播", BURST_PAUSE + 2)
+    W.log(f"    恢复播放后各帧白块质心：{xs['points']}")
     # 这一项还要给 5.5 段当前提：Surface 重建后播放器只在**播放中**才重绘，
     # 暂停态重建本来就该是黑的（那是播放器的正常行为，不是缺陷）。
-    resumed = moving(motion_stats(xs))
-    check("点「播放」后画面重新动起来（可暂停、可恢复）", resumed,
-          motion_text(motion_stats(xs)))
+    check("点「播放」后画面重新动起来（可暂停、可恢复）", resumed is True, why)
+
+    # 切走前画面在第几秒。**必须在这里取**：这是 5.6 段那条判据的对照值，
+    # 而下一段就要按 HOME 了 —— 之后再想量"切走前"已经不可能。
+    # 取连拍的**最后一帧**：它离按 HOME 最近。
+    before_secs = implied_secs(xs["points"][-1][1], xs["band_w"], xs["block_w"]) \
+        if xs["points"] else None
 
     # ---- 5.5 切后台再回来：Surface 会重建 ----
     #
@@ -1440,7 +2132,8 @@ def run_phase_b():
     # 就该是黑的。上一版就在这儿白追了一轮"读取器被误关"—— 真实原因是前一步的
     # "恢复播放"根本没执行到（控制条读不到），影片一直停在暂停态。
     check("切后台之前影片确实在播（上一条连拍已证明画面在动）",
-          resumed, "播放中" if resumed else "上一步没量到运动，这一段的结论无效")
+          resumed is True,
+          "播放中" if resumed is True else f"上一步没量到运动，这一段的结论无效（{why}）")
 
     page_before_home = current_page()
     W.log("按 HOME 切到后台，再切回来（Surface 会走一遍 destroyed → created）")
@@ -1453,6 +2146,35 @@ def run_phase_b():
     alive = [t for t in back if t[2]]
     check("切后台再回来后画面上还有影片（播放器重建时读取器没被误关）",
           len(alive) > 0, f"{len(back)} 帧里 {len(alive)} 帧有影片画面")
+
+    # ---- 5.6 切后台回来，**位置**不能丢 ----
+    #
+    # 「画面还在动」和「从我离开的地方接着播」是两件事，必须各有一条判据。
+    # 2026-09-17 之前这里只有前者，而它一直是 PASS 的 —— 用户回来后影片却是从
+    # 第 0 秒开始的。两次现场（同一份包，`v110-release.run1` / `.run2`）：
+    # 切走前分别在第 62.8 / 40.5 秒，回来第一批帧落在第 0.9~13.8 / 0.0 秒。
+    #
+    # ## 判据的取样点必须紧贴这批帧
+    #
+    # 用的是**上面这 4 张**，不是后面"返回后重播"那 5 张。后者要等 `reveal_controls`
+    # 走完（模拟器一慢就是几十秒），而位置一旦被复位、画面从 0 重播几十秒后早就又
+    # **反超**了切走前的位置 —— 拿那批帧判断会把缺陷放过。这不是假想：
+    # `run1` 里切走前 62.8s、回来第一批 0.9~13.8s（位置已丢），
+    # 而 45 秒后的那批已经是 70.9~87.1s（看起来"接上了"，其实是重播追上的）。
+    #
+    # 量的是**画面**而不是控制条上那个 `m:ss`：后者是应用自己的说法，而那次冻结的
+    # 现场就是"界面说 0:52、画面贴在 0 秒"—— 两个读数打架时以画面为准。
+    xs_back = centroids(rows)
+    W.log(f"    回来那一刻各帧白块质心：{xs_back['points']}")
+    after_secs = [implied_secs(cx, xs_back["band_w"], xs_back["block_w"])
+                  for _, cx in xs_back["points"]]
+    after_secs = [s for s in after_secs if s is not None]
+    verdict, why = position_keep_verdict(before_secs, after_secs)
+    if verdict == "skip":
+        skip("切后台回来没有从头重播", why)
+    else:
+        check("切后台回来没有从头重播（从我离开的地方接着播）",
+              verdict == "pass", why)
     # 切出去看一眼不该让用户"回来发现自己翻到别的影片了"。页数只有 2 页，
     # 而这一条盯的正是"退到后台/回前台"这条路会不会把 Pager 的位置弄丢。
     page_after_home = current_page()
@@ -1483,11 +2205,10 @@ def run_phase_b():
             W.log(f"    切回来是暂停态，点播放键（{glyph['cx']},{glyph['cy']}）重新播一遍")
             W.tap(glyph["cx"], glyph["cy"])
             time.sleep(0.6)
-    rows = burst("B-横屏-返回后重播", 5)
-    xs = centroids(rows)
-    W.log(f"    返回后重播各帧白块质心：{xs}")
+    resumed2, xs2, why2 = motion_settled("B-横屏-返回后重播", BURST_PAUSE + 1)
+    W.log(f"    返回后重播各帧白块质心：{xs2['points']}")
     check("返回后还能重新播放（画面真的在动，说明读取器仍可用）",
-          moving(motion_stats(xs)), motion_text(motion_stats(xs)))
+          resumed2 is True, why2)
 
     check("解码器被创建过（logcat）", R108.decoder_created(),
           "NuPlayerDriver / c2.*.h264.decoder")
@@ -1546,9 +2267,18 @@ def run_phase_b():
     W.shot("删除后-空库")
     check("删除后页头回到「· 0 项」", left == 0, f"页头读到 {left} 项")
 
-    files = attachments()
-    check("删除记录后视频密文也一起消失（不是只删了记录）",
-          len(files) == 0, f"attachments 里还剩 {list(files)}")
+    if SANDBOX_OK:
+        files = attachments()
+        check("删除记录后视频密文也一起消失（不是只删了记录）",
+              len(files) == 0, f"attachments 里还剩 {list(files)}")
+    else:
+        # **这条原来是 `len(files) == 0`，在 release 包上恒真**：run-as 被拒 →
+        # files 永远是空的 → 0 == 0 无条件成立。一条永远为真的断言等于没有断言，
+        # 而且它比红的更危险（红至少会有人看）。2026-09-17 实测就是这样：
+        # 同一轮里它绿着，旁边三条同源的判据红着。
+        skip("删除记录后视频密文也一起消失（不是只删了记录）",
+             "release 包不可调试，读不到沙箱（run-as 被拒）—— "
+             "页头「· 0 项」已证明记录删了；密文一并消失这条在 debug 包那轮验过")
 
 
 def main():
@@ -1565,12 +2295,18 @@ def main():
         run_phase_b()
 
     print()
+    if SKIPPED:
+        # 单独说一段，措辞上就不能让人读成"通过了"。
+        W.log(f"另有 {len(SKIPPED)} 条在这一轮**不适用**（既不算通过、也不算失败）：")
+        for s in SKIPPED:
+            print(f"    · {s}")
     if FAILURES:
         W.log(f"共 {len(FAILURES)} 条未通过：")
         for f in FAILURES:
             print(f"    · {f}")
         sys.exit(1)
-    W.log(f"第 {phase} 轮全部通过")
+    W.log(f"第 {phase} 轮全部通过"
+          + (f"（另有 {len(SKIPPED)} 条不适用，见上）" if SKIPPED else ""))
 
 
 if __name__ == "__main__":
